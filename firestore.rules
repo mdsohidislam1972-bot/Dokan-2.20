@@ -1,0 +1,142 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isStoreMember(storeId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/stores/$(storeId)) &&
+        (
+          get(/databases/$(database)/documents/stores/$(storeId)).data.ownerId == request.auth.uid ||
+          (
+            'memberUids' in get(/databases/$(database)/documents/stores/$(storeId)).data &&
+            request.auth.uid in get(/databases/$(database)/documents/stores/$(storeId)).data.memberUids
+          )
+        );
+    }
+
+    function isStoreOwner(storeId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/stores/$(storeId)) &&
+        get(/databases/$(database)/documents/stores/$(storeId)).data.ownerId == request.auth.uid;
+    }
+
+    // User document: maps account to their active store
+    match /users/{userId} {
+      allow read, write: if isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Store root document
+    match /stores/{storeId} {
+      // First user who creates the store becomes owner
+      allow create: if isSignedIn() && request.resource.data.ownerId == request.auth.uid;
+      allow read: if isSignedIn() && (
+        resource.data.ownerId == request.auth.uid ||
+        ('memberUids' in resource.data && request.auth.uid in resource.data.memberUids)
+      );
+      // Only owner can update store settings, members, or delete
+      allow update, delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      // Meta counters for sequential invoice numbering
+      match /meta/{counterId} {
+        allow read, write: if isSignedIn();
+      }
+
+      // Products subcollection
+      match /products/{productId} {
+        allow read: if isStoreMember(storeId);
+        allow create, update: if isStoreMember(storeId) &&
+          request.resource.data.stock >= 0;
+        allow delete: if isStoreOwner(storeId);
+      }
+
+      // Sales subcollection
+      match /sales/{saleId} {
+        allow read: if isStoreMember(storeId);
+        allow create: if isStoreMember(storeId) &&
+          request.resource.data.soldBy == request.auth.uid;
+        // Sales records can only be managed by the owner
+        allow update, delete: if isStoreOwner(storeId);
+      }
+
+      // Customers (Baki credit ledger) subcollection
+      match /customers/{customerId} {
+        allow read, write: if isStoreMember(storeId);
+      }
+
+      // Payments subcollection
+      match /payments/{paymentId} {
+        allow read, write: if isStoreMember(storeId);
+      }
+
+      // Suppliers subcollection
+      match /suppliers/{supplierId} {
+        allow read, write: if isStoreMember(storeId);
+      }
+
+      // Purchases subcollection
+      match /purchases/{purchaseId} {
+        allow read, write: if isStoreMember(storeId);
+      }
+
+      // Purchase returns subcollection
+      match /purchaseReturns/{returnId} {
+        allow read, write: if isStoreMember(storeId);
+      }
+
+      // Health fix logs subcollection (audited data fixes)
+      match /healthFixLogs/{logId} {
+        allow read: if isStoreMember(storeId);
+        allow create: if isStoreOwner(storeId);
+      }
+
+      // Accounts subcollection (Cash, Bank, Wallet)
+      match /accounts/{accountId} {
+        allow read: if isStoreMember(storeId);
+        allow create: if isStoreMember(storeId);
+        // Only owner can archive an account
+        allow update: if isStoreOwner(storeId);
+        allow delete: if false; // Accounts are archived, never permanently deleted
+      }
+
+      // Account Adjustments subcollection (Immutable audit log)
+      match /accountAdjustments/{adjustmentId} {
+        allow read: if isStoreMember(storeId);
+        // Only store owner can record a balance adjustment
+        allow create: if isStoreOwner(storeId);
+        allow update, delete: if false; // Immutable audit log
+      }
+
+      // Expenses subcollection
+      match /expenses/{expenseId} {
+        allow read: if isStoreMember(storeId);
+        allow create, update: if isStoreMember(storeId);
+        allow delete: if isStoreOwner(storeId);
+      }
+
+      // Other Income subcollection
+      match /otherIncomes/{incomeId} {
+        allow read: if isStoreMember(storeId);
+        allow create, update: if isStoreMember(storeId);
+        allow delete: if isStoreOwner(storeId);
+      }
+
+      // Categories subcollection
+      match /categories/{categoryId} {
+        allow read, write: if isStoreMember(storeId);
+      }
+
+      // Store Notes subcollection
+      match /notes/{noteId} {
+        allow read, write: if isStoreMember(storeId);
+      }
+
+      // Supplier Payments subcollection
+      match /supplierPayments/{paymentId} {
+        allow read, write: if isStoreMember(storeId);
+      }
+    }
+  }
+}

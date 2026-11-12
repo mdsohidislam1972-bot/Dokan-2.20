@@ -1,0 +1,6 @@
+{
+  "name": "StoreOS",
+  "description": "Multi-device retail shop management, POS, inventory, and Baki credit ledger system.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

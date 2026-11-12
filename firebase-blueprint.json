@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "UserProfile": {
+      "collection": "users",
+      "fields": {
+        "storeId": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "createdAt": { "type": "timestamp" },
+        "updatedAt": { "type": "timestamp" }
+      }
+    },
+    "Store": {
+      "collection": "stores",
+      "fields": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "memberUids": { "type": "array" },
+        "members": { "type": "array" },
+        "createdAt": { "type": "timestamp" },
+        "updatedAt": { "type": "timestamp" }
+      }
+    },
+    "Product": {
+      "collection": "stores/{storeId}/products",
+      "fields": {
+        "storeId": { "type": "string" },
+        "name": { "type": "string" },
+        "barcode": { "type": "string" },
+        "category": { "type": "string" },
+        "buyPrice": { "type": "number" },
+        "sellPrice": { "type": "number" },
+        "stock": { "type": "number" },
+        "createdAt": { "type": "timestamp" },
+        "updatedAt": { "type": "timestamp" }
+      }
+    },
+    "Sale": {
+      "collection": "stores/{storeId}/sales",
+      "fields": {
+        "storeId": { "type": "string" },
+        "invoiceNo": { "type": "string" },
+        "items": { "type": "array" },
+        "totalItems": { "type": "number" },
+        "subtotal": { "type": "number" },
+        "discount": { "type": "number" },
+        "grandTotal": { "type": "number" },
+        "profit": { "type": "number" },
+        "soldBy": { "type": "string" },
+        "createdAt": { "type": "timestamp" }
+      }
+    },
+    "Customer": {
+      "collection": "stores/{storeId}/customers",
+      "fields": {
+        "storeId": { "type": "string" },
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "dueBalance": { "type": "number" },
+        "createdAt": { "type": "timestamp" },
+        "updatedAt": { "type": "timestamp" }
+      }
+    },
+    "Payment": {
+      "collection": "stores/{storeId}/payments",
+      "fields": {
+        "storeId": { "type": "string" },
+        "customerId": { "type": "string" },
+        "amount": { "type": "number" },
+        "receivedBy": { "type": "string" },
+        "createdAt": { "type": "timestamp" }
+      }
+    },
+    "StoreCounter": {
+      "collection": "stores/{storeId}/meta",
+      "fields": {
+        "invoiceSeq": { "type": "number" }
+      }
+    }
+  }
+}
