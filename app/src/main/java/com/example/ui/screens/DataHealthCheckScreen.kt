@@ -88,8 +88,15 @@ fun DataHealthCheckScreen(
     val problems by storeViewModel.healthProblems.collectAsState()
     val isScanning by storeViewModel.isScanningHealth.collectAsState()
     val fixLogs by storeViewModel.healthFixLogs.collectAsState()
-    val userProfile by authViewModel.userProfile.collectAsState()
-    val isOwner = remember(userProfile) { userProfile?.role == "owner" || userProfile == null }
+    val isOwner by storeViewModel.isOwner.collectAsState()
+
+    if (!isOwner) {
+        com.example.ui.components.NoPermissionScreen(
+            onBack = { storeViewModel.navigateBackInBusiness() },
+            modifier = modifier
+        )
+        return
+    }
 
     var selectedProblemToFix by remember { mutableStateOf<HealthProblem?>(null) }
     var showStaffBlockedModal by remember { mutableStateOf(false) }
@@ -427,7 +434,7 @@ fun DataHealthCheckScreen(
                                 selectedProblemToFix = null
                                 storeViewModel.applyHealthFix(
                                     problem = problemToApply,
-                                    ownerUid = userProfile?.id ?: "store_owner"
+                                    ownerUid = storeViewModel.currentUserId
                                 ) {
                                     Toast.makeText(context, "Fix applied successfully!", Toast.LENGTH_SHORT).show()
                                 }

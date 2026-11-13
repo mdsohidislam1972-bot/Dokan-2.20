@@ -114,19 +114,10 @@ fun StaffManagementScreen(
     }
 
     if (!isOwner) {
-        Box(
+        com.example.ui.components.NoPermissionScreen(
+            onBack = { storeViewModel.navigateBackInBusiness() },
             modifier = modifier
-                .fillMaxSize()
-                .background(DarkBackground),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = "You do not have permission to access Staff Management.",
-                color = AlertRed,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.Medium
-            )
-        }
+        )
         return
     }
 
@@ -810,6 +801,14 @@ fun StaffMemberDetailsScreen(
         storeViewModel.navigateBackInBusiness()
     }
 
+    if (!isOwner) {
+        com.example.ui.components.NoPermissionScreen(
+            onBack = { storeViewModel.navigateBackInBusiness() },
+            modifier = modifier
+        )
+        return
+    }
+
     if (member == null) {
         Box(
             modifier = modifier
@@ -1119,8 +1118,7 @@ fun StaffMemberDetailsScreen(
                     GlassOutlinedButton(
                         text = "Remove Staff Member",
                         onClick = { showConfirmRemoveDialog = true },
-                        modifier = Modifier.fillMaxWidth(),
-                        containerColor = Color(0x22E53935)
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CreditCard
 import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.PostAdd
@@ -63,6 +64,7 @@ import com.example.ui.components.FloatingGlassPillBottomBar
 import com.example.ui.components.GlassCard
 import com.example.ui.components.LanguageToggle
 import com.example.ui.components.MetricCard
+import com.example.ui.components.NoPermissionScreen
 import com.example.ui.components.QuantityProgressRing
 import com.example.ui.components.ShopNavTab
 import com.example.ui.components.VividButton
@@ -91,9 +93,67 @@ fun MainShopScreen(
     val store by storeViewModel.store.collectAsState()
     val syncStatus by storeViewModel.syncStatus.collectAsState()
 
+    val isRemoved by storeViewModel.isRemoved.collectAsState()
+    val isOwner by storeViewModel.isOwner.collectAsState()
+    val currentMember by storeViewModel.currentMember.collectAsState()
+
+    val canSell by storeViewModel.canSellFlow.collectAsState()
+    val canViewStock by storeViewModel.canViewStockFlow.collectAsState()
+    val canSeeHistory by storeViewModel.canSeeHistoryFlow.collectAsState()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
+    val canViewReports by storeViewModel.canViewReportsFlow.collectAsState()
+    val canAddEdit by storeViewModel.canAddEditProductsFlow.collectAsState()
+
     var showAddWizard by remember { mutableStateOf(false) }
     var editingProduct by remember { mutableStateOf<Product?>(null) }
     val isBusy by storeViewModel.isBusy.collectAsState()
+    val errorMessage by storeViewModel.errorMessage.collectAsState()
+
+    if (isRemoved) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(DarkBackground)
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.padding(20.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = AlertRed,
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = if (currentLanguage == AppLanguage.BN) "অ্যাক্সেস প্রত্যাহার করা হয়েছে" else "Access Revoked",
+                        color = AlertRed,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (currentLanguage == AppLanguage.BN) "আপনি আর এই দোকানে অ্যাক্সেস করতে পারবেন না। দয়া করে দোকানের মালিকের সাথে যোগাযোগ করুন।"
+                        else "You no longer have access to this store. Please contact the store owner.",
+                        color = TextSecondary,
+                        fontSize = 14.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    VividButton(
+                        text = if (currentLanguage == AppLanguage.BN) "লগ আউট করুন" else "Sign Out",
+                        onClick = { authViewModel.signOut(context) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+        return
+    }
 
     Scaffold(
         modifier = modifier
@@ -103,7 +163,7 @@ fun MainShopScreen(
         topBar = {
             ShopTopBar(
                 storeName = store?.name ?: "Store",
-                ownerRole = ShopLocale.get("owner_badge", currentLanguage),
+                ownerRole = if (isOwner) ShopLocale.get("owner_badge", currentLanguage) else (currentMember?.roleLabel ?: "Staff"),
                 syncStatus = syncStatus,
                 currentLanguage = currentLanguage,
                 onToggleLanguage = { storeViewModel.toggleLanguage() },
@@ -113,7 +173,11 @@ fun MainShopScreen(
         bottomBar = {
             FloatingGlassPillBottomBar(
                 currentTab = currentTab,
-                onTabSelected = { currentTab = it }
+                onTabSelected = { currentTab = it },
+                canSell = canSell,
+                canViewStock = canViewStock,
+                canSeeHistory = canSeeHistory,
+                canViewReports = canViewReports
             )
         }
     ) { innerPadding ->
@@ -125,26 +189,48 @@ fun MainShopScreen(
             when (currentTab) {
                 ShopNavTab.HOME -> HomeDashboardContent(
                     storeViewModel = storeViewModel,
-                    onNavigateToSell = { currentTab = ShopNavTab.SELL },
-                    onNavigateToStock = { currentTab = ShopNavTab.STOCK },
-                    onNavigateToBaki = { currentTab = ShopNavTab.BUSINESS },
-                    onOpenAddProduct = { showAddWizard = true },
-                    onEditProduct = { editingProduct = it }
+                    onNavigateToSell = { if (canSell) currentTab = ShopNavTab.SELL },
+                    onNavigateToStock = { if (canViewStock) currentTab = ShopNavTab.STOCK },
+                    onNavigateToBaki = { if (canViewReports) currentTab = ShopNavTab.BUSINESS },
+                    onOpenAddProduct = {
+                        if (canAddEdit) {
+                            storeViewModel.clearErrorMessage()
+                            showAddWizard = true
+                        }
+                    },
+                    onEditProduct = {
+                        if (canAddEdit) {
+                            storeViewModel.clearErrorMessage()
+                            editingProduct = it
+                        }
+                    }
                 )
-                ShopNavTab.STOCK -> StockScreen(
-                    storeViewModel = storeViewModel
-                )
-                ShopNavTab.SELL -> SellScreen(
-                    storeViewModel = storeViewModel
-                )
-                ShopNavTab.HISTORY -> HistoryScreen(
-                    storeViewModel = storeViewModel,
-                    onNavigateToStock = { currentTab = ShopNavTab.STOCK }
-                )
-                ShopNavTab.BUSINESS -> BusinessScreen(
-                    authViewModel = authViewModel,
-                    storeViewModel = storeViewModel
-                )
+                ShopNavTab.STOCK -> if (canViewStock) {
+                    StockScreen(storeViewModel = storeViewModel)
+                } else {
+                    NoPermissionScreen(onBack = { currentTab = ShopNavTab.HOME })
+                }
+                ShopNavTab.SELL -> if (canSell) {
+                    SellScreen(storeViewModel = storeViewModel)
+                } else {
+                    NoPermissionScreen(onBack = { currentTab = ShopNavTab.HOME })
+                }
+                ShopNavTab.HISTORY -> if (canSeeHistory) {
+                    HistoryScreen(
+                        storeViewModel = storeViewModel,
+                        onNavigateToStock = { currentTab = ShopNavTab.STOCK }
+                    )
+                } else {
+                    NoPermissionScreen(onBack = { currentTab = ShopNavTab.HOME })
+                }
+                ShopNavTab.BUSINESS -> if (canViewReports) {
+                    BusinessScreen(
+                        authViewModel = authViewModel,
+                        storeViewModel = storeViewModel
+                    )
+                } else {
+                    NoPermissionScreen(onBack = { currentTab = ShopNavTab.HOME })
+                }
             }
         }
     }
@@ -153,7 +239,12 @@ fun MainShopScreen(
         AddProductWizardDialog(
             currentLanguage = currentLanguage,
             isBusy = isBusy,
-            onDismiss = { showAddWizard = false },
+            canSeeBuyingPrice = canSeeProfit,
+            externalError = errorMessage,
+            onDismiss = {
+                storeViewModel.clearErrorMessage()
+                showAddWizard = false
+            },
             onConfirm = { name, nameBn, category, unit, buy, sell, stock, lowLimit, photo ->
                 storeViewModel.addNewProductWizard(
                     name = name,
@@ -176,7 +267,12 @@ fun MainShopScreen(
             productToEdit = editingProduct,
             currentLanguage = currentLanguage,
             isBusy = isBusy,
-            onDismiss = { editingProduct = null },
+            canSeeBuyingPrice = canSeeProfit,
+            externalError = errorMessage,
+            onDismiss = {
+                storeViewModel.clearErrorMessage()
+                editingProduct = null
+            },
             onConfirm = { name, nameBn, category, unit, buy, sell, stock, lowLimit, photo ->
                 storeViewModel.updateProductWizard(
                     productId = editingProduct!!.id,
@@ -192,11 +288,13 @@ fun MainShopScreen(
                     onSuccess = { editingProduct = null }
                 )
             },
-            onDelete = {
-                storeViewModel.deleteProduct(editingProduct!!.id) {
-                    editingProduct = null
+            onDelete = if (isOwner) {
+                {
+                    storeViewModel.deleteProduct(editingProduct!!.id) {
+                        editingProduct = null
+                    }
                 }
-            }
+            } else null
         )
     }
 }
@@ -361,6 +459,15 @@ fun HomeDashboardContent(
     val recentSales by storeViewModel.recentSales.collectAsState()
     val bakiOverview by storeViewModel.bakiOverview.collectAsState()
 
+    val canSell by storeViewModel.canSellFlow.collectAsState()
+    val canAddEdit by storeViewModel.canAddEditProductsFlow.collectAsState()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
+    val canBaki by storeViewModel.canAccessCustomersAndBakiFlow.collectAsState()
+    val canViewStock by storeViewModel.canViewStockFlow.collectAsState()
+    val canSeeHistory by storeViewModel.canSeeHistoryFlow.collectAsState()
+    val canViewReports by storeViewModel.canViewReportsFlow.collectAsState()
+    val canSeeSalesSummary = canSeeHistory || canViewReports
+
     var quickRestockProduct by remember { mutableStateOf<Product?>(null) }
 
     LazyColumn(
@@ -371,78 +478,88 @@ fun HomeDashboardContent(
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         // Quick Action Buttons
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                VividButton(
-                    text = "New Sale (Sell)",
-                    onClick = onNavigateToSell,
-                    icon = Icons.Default.AddShoppingCart,
-                    modifier = Modifier.weight(1f),
-                    testTag = "home_new_sale_btn"
-                )
-                VividButton(
-                    text = "+ Add Product",
-                    onClick = onOpenAddProduct,
-                    icon = Icons.Default.PostAdd,
-                    modifier = Modifier.weight(1f),
-                    testTag = "home_add_product_btn"
-                )
+        if (canSell || canAddEdit) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (canSell) {
+                        VividButton(
+                            text = "New Sale (Sell)",
+                            onClick = onNavigateToSell,
+                            icon = Icons.Default.AddShoppingCart,
+                            modifier = Modifier.weight(1f),
+                            testTag = "home_new_sale_btn"
+                        )
+                    }
+                    if (canAddEdit) {
+                        VividButton(
+                            text = "+ Add Product",
+                            onClick = onOpenAddProduct,
+                            icon = Icons.Default.PostAdd,
+                            modifier = Modifier.weight(1f),
+                            testTag = "home_add_product_btn"
+                        )
+                    }
+                }
             }
         }
 
         // Today's Sales & Today's Net Profit (from CalculationEngine)
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                MetricCard(
-                    title = "Today's Sales",
-                    value = ShopLocale.formatMoney(financials.todaySales, currentLanguage),
-                    icon = Icons.Default.MonetizationOn,
-                    isHighlight = true,
-                    modifier = Modifier.weight(1f),
-                    onClick = onNavigateToSell
-                )
-                MetricCard(
-                    title = "Net Profit",
-                    value = ShopLocale.formatMoney(financials.todayProfit, currentLanguage),
-                    icon = Icons.Default.TrendingUp,
-                    isHighlight = true,
-                    modifier = Modifier.weight(1f),
-                    onClick = onNavigateToSell
-                )
+        if (canSeeSalesSummary) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    MetricCard(
+                        title = "Today's Sales",
+                        value = ShopLocale.formatMoney(financials.todaySales, currentLanguage),
+                        icon = Icons.Default.MonetizationOn,
+                        isHighlight = true,
+                        modifier = Modifier.weight(1f),
+                        onClick = onNavigateToSell
+                    )
+                    if (canSeeProfit) {
+                        MetricCard(
+                            title = "Net Profit",
+                            value = ShopLocale.formatMoney(financials.todayProfit, currentLanguage),
+                            icon = Icons.Default.TrendingUp,
+                            isHighlight = true,
+                            modifier = Modifier.weight(1f),
+                            onClick = onNavigateToSell
+                        )
+                    }
+                }
             }
-        }
 
-        // Orders & Items Sold (from CalculationEngine)
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                MetricCard(
-                    title = "Orders Completed",
-                    value = ShopLocale.formatNumber(financials.todayOrdersCount, currentLanguage),
-                    icon = Icons.Default.ReceiptLong,
-                    modifier = Modifier.weight(1f),
-                    onClick = onNavigateToSell
-                )
-                MetricCard(
-                    title = "Items Sold",
-                    value = ShopLocale.formatNumber(financials.todayItemsSold, currentLanguage),
-                    icon = Icons.Default.ShoppingBag,
-                    modifier = Modifier.weight(1f),
-                    onClick = onNavigateToSell
-                )
+            // Orders & Items Sold (from CalculationEngine)
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    MetricCard(
+                        title = "Orders Completed",
+                        value = ShopLocale.formatNumber(financials.todayOrdersCount, currentLanguage),
+                        icon = Icons.Default.ReceiptLong,
+                        modifier = Modifier.weight(1f),
+                        onClick = onNavigateToSell
+                    )
+                    MetricCard(
+                        title = "Items Sold",
+                        value = ShopLocale.formatNumber(financials.todayItemsSold, currentLanguage),
+                        icon = Icons.Default.ShoppingBag,
+                        modifier = Modifier.weight(1f),
+                        onClick = onNavigateToSell
+                    )
+                }
             }
         }
 
         // Total Baki Card (Rule 9: from calculation module using existing card style)
-        if (bakiOverview.totalBakiOwed > 0.0) {
+        if (canBaki && canViewReports && bakiOverview.totalBakiOwed > 0.0) {
             item {
                 MetricCard(
                     title = if (currentLanguage == AppLanguage.BN) "মোট বাকি (বকেয়া)" else "Total Baki Owed",
@@ -456,7 +573,7 @@ fun HomeDashboardContent(
         }
 
         // Low-Stock Alerts Section (Tapping opens product edit/details)
-        if (lowStockProducts.isNotEmpty()) {
+        if (canViewStock && lowStockProducts.isNotEmpty()) {
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -495,51 +612,54 @@ fun HomeDashboardContent(
                 LowStockAlertCard(
                     product = prod,
                     currentLanguage = currentLanguage,
-                    onClick = { onEditProduct(prod) },
+                    canAddEdit = canAddEdit,
+                    onClick = { if (canAddEdit) onEditProduct(prod) },
                     onRestock = { quickRestockProduct = prod }
                 )
             }
         }
 
         // Recent Sales List (from CalculationEngine)
-        item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Recent Sales Invoices",
-                    color = TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1
-                )
-                if (recentSales.isNotEmpty()) {
-                    Text(
-                        text = "${recentSales.size} recorded",
-                        color = TextMuted,
-                        fontSize = 12.sp
-                    )
-                }
-            }
-        }
-
-        if (recentSales.isEmpty()) {
+        if (canSeeSalesSummary) {
             item {
-                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "No sales recorded yet today. Tap 'SELL' below to create your first order.",
-                        color = TextSecondary,
-                        fontSize = 13.sp,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
+                        text = "Recent Sales Invoices",
+                        color = TextPrimary,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
                     )
+                    if (recentSales.isNotEmpty()) {
+                        Text(
+                            text = "${recentSales.size} recorded",
+                            color = TextMuted,
+                            fontSize = 12.sp
+                        )
+                    }
                 }
             }
-        } else {
-            items(recentSales.take(5), key = { "recent_${it.id}" }) { sale ->
-                SaleReceiptCard(sale = sale, currentLanguage = currentLanguage)
+
+            if (recentSales.isEmpty()) {
+                item {
+                    GlassCard(modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            text = "No sales recorded yet today. Tap 'SELL' below to create your first order.",
+                            color = TextSecondary,
+                            fontSize = 13.sp,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            } else {
+                items(recentSales.take(5), key = { "recent_${it.id}" }) { sale ->
+                    SaleReceiptCard(sale = sale, currentLanguage = currentLanguage)
+                }
             }
         }
 
@@ -563,7 +683,11 @@ fun HomeDashboardContent(
                             maxLines = 1
                         )
                         Text(
-                            text = "Real data only. Profit = (Sale x Qty) - (Buy x Qty) - Discount.",
+                            text = if (canSeeProfit) {
+                                "Real data only. Profit = (Sale x Qty) - (Buy x Qty) - Discount."
+                            } else {
+                                "Real data only. Single calculation engine verified."
+                            },
                             color = TextSecondary,
                             fontSize = 11.sp,
                             maxLines = 1
@@ -590,6 +714,7 @@ fun HomeDashboardContent(
 fun LowStockAlertCard(
     product: Product,
     currentLanguage: AppLanguage,
+    canAddEdit: Boolean = true,
     onClick: () -> Unit,
     onRestock: () -> Unit
 ) {
@@ -598,7 +723,7 @@ fun LowStockAlertCard(
     GlassCard(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickable(enabled = canAddEdit, onClick = onClick)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -633,12 +758,14 @@ fun LowStockAlertCard(
                 }
             }
 
-            VividButton(
-                text = "+ Stock",
-                onClick = onRestock,
-                modifier = Modifier.defaultMinSize(minHeight = 36.dp),
-                testTag = "home_restock_${product.id}"
-            )
+            if (canAddEdit) {
+                VividButton(
+                    text = "+ Stock",
+                    onClick = onRestock,
+                    modifier = Modifier.defaultMinSize(minHeight = 36.dp),
+                    testTag = "home_restock_${product.id}"
+                )
+            }
         }
     }
 }

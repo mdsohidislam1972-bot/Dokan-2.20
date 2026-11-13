@@ -1,6 +1,7 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.net.Uri
 import android.util.Log
 import com.example.R
 import com.example.data.model.Account
@@ -8,6 +9,7 @@ import com.example.data.model.AccountAdjustment
 import com.example.data.model.Customer
 import com.example.data.model.Expense
 import com.example.data.model.HealthFixLog
+import com.example.data.model.InviteCodeConfig
 import com.example.data.model.OtherIncome
 import com.example.data.model.Payment
 import com.example.data.model.Product
@@ -18,43 +20,51 @@ import com.example.data.model.Sale
 import com.example.data.model.SaleItem
 import com.example.data.model.Store
 import com.example.data.model.StoreCategory
+import com.example.data.model.StoreInvite
 import com.example.data.model.StoreMember
 import com.example.data.model.StoreNote
+import com.example.data.model.StorePermissions
 import com.example.data.model.Supplier
 import com.example.data.model.SupplierPayment
 import com.example.data.model.UserProfile
 import com.example.domain.CalculationEngine
 import com.example.domain.HealthProblem
+import com.example.util.ProductImageUtil
 import com.google.firebase.Firebase
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.snapshots
+import com.google.firebase.storage.storage
+import com.google.firebase.storage.storageMetadata
 import java.util.Date
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
 
-class StoreRepository(private val db: FirebaseFirestore?) {
+class StoreRepository(
+    private val db: FirebaseFirestore?,
+    val appContext: Context? = null
+) {
 
     constructor(context: Context) : this(
-        try {
+        db = try {
             val dbId = context.applicationContext.getString(R.string.firestore_database_id)
-            if (dbId.isNotBlank()) FirebaseFirestore.getInstance(dbId) else FirebaseFirestore.getInstance()
+            if (dbId.isNotBlank()) FirebaseFirestore.getInstance(dbId) else null
         } catch (e: Exception) {
             Log.w("StoreRepository", "Firestore init fallback: ${e.message}")
-            try {
-                FirebaseFirestore.getInstance()
-            } catch (e2: Exception) {
-                null
-            }
-        }
+            null
+        },
+        appContext = context.applicationContext
     )
 
     private val auth get() = try { Firebase.auth } catch (e: Exception) { null }
@@ -669,6 +679,7 @@ class StoreRepository(private val db: FirebaseFirestore?) {
                 date = System.currentTimeMillis() - 86400000L,
                 createdBy = "demo_user",
                 createdAt = Timestamp(Date(System.currentTimeMillis() - 86400000L))
+            )
         )
     )
 
@@ -816,6 +827,47 @@ class StoreRepository(private val db: FirebaseFirestore?) {
             }
     }
 
+    private suspend fun uploadProductPhotoIfNeeded(
+        storeId: String,
+        productId: String,
+        photoUriString: String
+    ): String {
+        val trimmed = photoUriString.trim()
+        if (trimmed.isBlank() || !ProductImageUtil.isLocalPhotoUri(trimmed)) {
+            return trimmed
+        }
+        val context = appContext
+            ?: throw IllegalStateException("Application context required to upload product photo")
+        val compressedBytes = withContext(Dispatchers.IO) {
+            ProductImageUtil.compressImageForUpload(context, Uri.parse(trimmed))
+        }
+        val fileName = "${productId}_${System.currentTimeMillis()}.jpg"
+        if (storeId == "demo_store" || db == null) {
+            return withContext(Dispatchers.IO) {
+                ProductImageUtil.saveCompressedBytesLocally(context, fileName, compressedBytes)
+            }
+        }
+        val storageRef = Firebase.storage.reference
+            .child("stores")
+            .child(storeId)
+            .child("products")
+            .child(fileName)
+        val metadata = storageMetadata {
+            contentType = "image/jpeg"
+        }
+        storageRef.putBytes(compressedBytes, metadata).await()
+        return storageRef.downloadUrl.await().toString()
+    }
+
+    private suspend fun deleteProductPhotoBestEffort(photoUriString: String) {
+        val trimmed = photoUriString.trim()
+        if (trimmed.startsWith("https://firebasestorage.", ignoreCase = true)) {
+            runCatching {
+                Firebase.storage.getReferenceFromUrl(trimmed).delete().await()
+            }
+        }
+    }
+
     suspend fun addProduct(storeId: String, product: Product) {
         require(product.stock >= 0L) { "Stock quantity cannot be negative" }
         require(product.buyPrice >= 0.0) { "Cost price cannot be negative" }
@@ -823,13 +875,20 @@ class StoreRepository(private val db: FirebaseFirestore?) {
 
         if (storeId == "demo_store" || db == null) {
             val newId = "prod_${System.currentTimeMillis()}"
-            val newProd = product.copy(id = newId, storeId = storeId, createdAt = Timestamp.now())
+            val resolvedPhotoUri = uploadProductPhotoIfNeeded(storeId, newId, product.photoUri)
+            val newProd = product.copy(
+                id = newId,
+                storeId = storeId,
+                photoUri = resolvedPhotoUri,
+                createdAt = Timestamp.now()
+            )
             _demoProducts.value = (_demoProducts.value + newProd).sortedBy { it.name.lowercase() }
             return
         }
 
         val uid = requireUserId()
         val prodRef = db.collection("stores").document(storeId).collection("products").document()
+        val resolvedPhotoUri = uploadProductPhotoIfNeeded(storeId, prodRef.id, product.photoUri)
         val payload = mapOf(
             "storeId" to storeId,
             "name" to product.name.trim(),
@@ -841,7 +900,7 @@ class StoreRepository(private val db: FirebaseFirestore?) {
             "sellPrice" to product.sellPrice,
             "stock" to product.stock,
             "lowStockLimit" to product.lowStockLimit,
-            "photoUri" to product.photoUri,
+            "photoUri" to resolvedPhotoUri,
             "createdBy" to uid,
             "createdAt" to FieldValue.serverTimestamp(),
             "updatedAt" to FieldValue.serverTimestamp()
@@ -849,20 +908,24 @@ class StoreRepository(private val db: FirebaseFirestore?) {
         prodRef.set(payload).await()
     }
 
-    suspend fun updateProduct(storeId: String, product: Product) {
+    suspend fun updateProduct(storeId: String, product: Product, previousPhotoUri: String = "") {
         require(product.id.isNotBlank()) { "Product ID cannot be blank" }
         require(product.stock >= 0L) { "Stock quantity cannot be negative" }
         require(product.buyPrice >= 0.0) { "Cost price cannot be negative" }
         require(product.sellPrice >= 0.0) { "Sale price cannot be negative" }
 
         if (storeId == "demo_store" || db == null) {
+            val resolvedPhotoUri = uploadProductPhotoIfNeeded(storeId, product.id, product.photoUri)
             _demoProducts.value = _demoProducts.value.map {
-                if (it.id == product.id) product.copy(updatedAt = Timestamp.now()) else it
+                if (it.id == product.id) {
+                    product.copy(photoUri = resolvedPhotoUri, updatedAt = Timestamp.now())
+                } else it
             }
             return
         }
 
         requireUserId()
+        val resolvedPhotoUri = uploadProductPhotoIfNeeded(storeId, product.id, product.photoUri)
         val docRef = db.collection("stores").document(storeId).collection("products").document(product.id)
         val payload = mapOf(
             "name" to product.name.trim(),
@@ -873,13 +936,16 @@ class StoreRepository(private val db: FirebaseFirestore?) {
             "sellPrice" to product.sellPrice,
             "stock" to product.stock,
             "lowStockLimit" to product.lowStockLimit,
-            "photoUri" to product.photoUri,
+            "photoUri" to resolvedPhotoUri,
             "updatedAt" to FieldValue.serverTimestamp()
         )
         docRef.update(payload).await()
+        if (previousPhotoUri.isNotBlank() && previousPhotoUri != resolvedPhotoUri) {
+            deleteProductPhotoBestEffort(previousPhotoUri)
+        }
     }
 
-    suspend fun deleteProduct(storeId: String, productId: String) {
+    suspend fun deleteProduct(storeId: String, productId: String, photoUri: String = "") {
         require(productId.isNotBlank()) { "Product ID cannot be blank" }
 
         if (storeId == "demo_store" || db == null) {
@@ -890,6 +956,9 @@ class StoreRepository(private val db: FirebaseFirestore?) {
         requireUserId()
         db.collection("stores").document(storeId).collection("products").document(productId)
             .delete().await()
+        if (photoUri.isNotBlank()) {
+            deleteProductPhotoBestEffort(photoUri)
+        }
     }
 
     suspend fun addStock(storeId: String, productId: String, additionalStock: Long) {
@@ -2234,6 +2303,17 @@ class StoreRepository(private val db: FirebaseFirestore?) {
     // -------------------------------------------------------------
     // STAFF MEMBERS & INVITES
     // -------------------------------------------------------------
+    fun observeMyMember(storeId: String, uid: String): Flow<StoreMember?> {
+        val database = db
+        if (storeId == "demo_store" || database == null) {
+            return _demoMembers.map { list -> list.find { it.userId == uid } }
+        }
+        return database.collection("stores").document(storeId)
+            .collection("members").document(uid)
+            .snapshots()
+            .map { snap -> if (snap.exists()) snap.toObject(StoreMember::class.java) else null }
+    }
+
     fun observeMembers(storeId: String): Flow<List<StoreMember>> {
         val database = db
         if (storeId == "demo_store" || database == null) {
@@ -2264,8 +2344,13 @@ class StoreRepository(private val db: FirebaseFirestore?) {
 
     suspend fun createStaffInvite(invite: StoreInvite): String {
         val database = db
-        val code = invite.code.ifBlank {
-            "DOK-${(1000..9999).random()}"
+        val code = if (invite.code.isBlank()) {
+            InviteCodeConfig.generate()
+        } else {
+            InviteCodeConfig.normalize(invite.code)
+        }
+        require(InviteCodeConfig.isValidFormat(code)) {
+            "Invite code must be ${InviteCodeConfig.CODE_LENGTH} valid characters."
         }
         val inviteWithCode = invite.copy(code = code, id = code)
         if (invite.storeId == "demo_store" || database == null) {
@@ -2278,14 +2363,15 @@ class StoreRepository(private val db: FirebaseFirestore?) {
     }
 
     suspend fun cancelInvite(code: String) {
+        val cleanCode = InviteCodeConfig.normalize(code)
         val database = db
         if (database == null) {
             _demoInvites.value = _demoInvites.value.map {
-                if (it.code == code) it.copy(status = "cancelled") else it
+                if (InviteCodeConfig.normalize(it.code) == cleanCode) it.copy(status = "cancelled") else it
             }
             return
         }
-        database.collection("invites").document(code)
+        database.collection("invites").document(cleanCode)
             .update("status", "cancelled", "updatedAt", FieldValue.serverTimestamp())
             .await()
     }
@@ -2298,25 +2384,34 @@ class StoreRepository(private val db: FirebaseFirestore?) {
     ): Result<String> {
         val database = db
         val now = System.currentTimeMillis()
+        val cleanCode = InviteCodeConfig.normalize(code)
+
+        if (!InviteCodeConfig.isValidFormat(cleanCode)) {
+            return Result.failure(
+                IllegalArgumentException("Wrong invite code. Please check the ${InviteCodeConfig.CODE_LENGTH}-character code and try again.")
+            )
+        }
 
         // 1. Check if user already owns or belongs to another store
         val currentProfile = getUserProfileOnce(uid)
         if (currentProfile != null && currentProfile.storeId.isNotBlank()) {
-            return Result.failure(IllegalStateException("Your account is already linked to another store. An account can only belong to one store."))
+            return Result.failure(
+                IllegalStateException("Your account is already linked to another store. An account can only belong to one store.")
+            )
         }
 
         // Demo Mode joining
         if (database == null) {
-            val invite = _demoInvites.value.find { it.code.trim().equals(code.trim(), ignoreCase = true) }
-                ?: return Result.failure(IllegalArgumentException("Invalid invite code. Please check and try again."))
+            val invite = _demoInvites.value.find { InviteCodeConfig.normalize(it.code) == cleanCode }
+                ?: return Result.failure(IllegalArgumentException("Wrong invite code. Please check the ${InviteCodeConfig.CODE_LENGTH}-character code and try again."))
             if (invite.status == "cancelled") {
-                return Result.failure(IllegalStateException("This invite was cancelled by the store owner."))
+                return Result.failure(IllegalStateException("This invite code was cancelled by the store owner."))
             }
             if (invite.status == "used") {
-                return Result.failure(IllegalStateException("This invite code has already been used and is no longer valid."))
+                return Result.failure(IllegalStateException("This invite code has already been used."))
             }
             if (now > invite.expiresAt) {
-                return Result.failure(IllegalStateException("This invite code has expired (valid for 24 hours). Please ask the owner to generate a new invite."))
+                return Result.failure(IllegalStateException("This invite code has expired. Please ask the store owner for a new invite."))
             }
 
             _demoInvites.value = _demoInvites.value.map {
@@ -2333,49 +2428,66 @@ class StoreRepository(private val db: FirebaseFirestore?) {
                 permissions = invite.permissions,
                 status = "Active",
                 joinedTime = now,
-                invitedBy = invite.createdByUid
+                invitedBy = invite.createdByUid,
+                inviteCode = cleanCode
             )
             _demoMembers.value = _demoMembers.value.filter { it.userId != uid } + newMember
 
             val currentStore = _demoStore.value
-            _demoStore.value = currentStore.copy(
-                memberUids = (currentStore.memberUids + uid).distinct(),
-                members = (currentStore.members.filter { it.userId != uid } + newMember)
-            )
+            if (currentStore != null) {
+                _demoStore.value = currentStore.copy(
+                    memberUids = (currentStore.memberUids + uid).distinct(),
+                    members = (currentStore.members.filter { it.userId != uid } + newMember)
+                )
+            }
 
             return Result.success(invite.storeId)
         }
 
-        // Real Firestore Mode with atomic Transaction
-        val inviteRef = database.collection("invites").document(code.trim().uppercase())
+        // Real Firestore Mode with single atomic Transaction.
+        // Note: Non-members cannot read /stores/{storeId} until after joining, so we read only /invites/{code}
+        // and update /stores/{storeId}.memberUids atomically with FieldValue.arrayUnion(uid).
+        val inviteRef = database.collection("invites").document(cleanCode)
         return try {
             val storeIdResult = database.runTransaction { tx ->
                 val inviteSnap = tx.get(inviteRef)
                 if (!inviteSnap.exists()) {
-                    throw IllegalArgumentException("Invalid invite code. Please check and try again.")
+                    throw IllegalArgumentException("Wrong invite code. Please check the ${InviteCodeConfig.CODE_LENGTH}-character code and try again.")
                 }
                 val invite = inviteSnap.toObject(StoreInvite::class.java)
-                    ?: throw IllegalArgumentException("Could not read invite data.")
+                    ?: throw IllegalArgumentException("Wrong invite code. Could not read invite data.")
 
-                if (invite.status == "cancelled") {
-                    throw IllegalStateException("This invite was cancelled by the store owner.")
-                }
-                if (invite.status == "used") {
-                    throw IllegalStateException("This invite code has already been used and is no longer valid.")
-                }
-                if (now > invite.expiresAt) {
-                    throw IllegalStateException("This invite code has expired (valid for 24 hours). Please request a new invite.")
+                when {
+                    invite.status == "cancelled" ->
+                        throw IllegalStateException("This invite code was cancelled by the store owner.")
+                    invite.status == "used" ->
+                        throw IllegalStateException("This invite code has already been used.")
+                    now > invite.expiresAt ->
+                        throw IllegalStateException("This invite code has expired. Please ask the store owner for a new invite.")
+                    invite.storeId.isBlank() ->
+                        throw IllegalArgumentException("Wrong invite code. Store details are missing.")
+                    invite.createdByUid == uid ->
+                        throw IllegalStateException("You are already the owner of this store.")
                 }
 
                 val targetStoreId = invite.storeId
                 val storeRef = database.collection("stores").document(targetStoreId)
-                val storeSnap = tx.get(storeRef)
-                if (!storeSnap.exists()) {
-                    throw IllegalStateException("Store not found.")
-                }
-
                 val memberRef = storeRef.collection("members").document(uid)
                 val userRef = database.collection("users").document(uid)
+
+                val newMember = StoreMember(
+                    userId = uid,
+                    displayName = invite.staffName.ifBlank { displayName.ifBlank { "Staff Member" } },
+                    email = email,
+                    role = invite.roleLabel.lowercase(),
+                    roleLabel = invite.roleLabel,
+                    permissionLevel = invite.permissionLevel,
+                    permissions = invite.permissions,
+                    status = "Active",
+                    joinedTime = now,
+                    invitedBy = invite.createdByUid,
+                    inviteCode = cleanCode
+                )
 
                 tx.update(
                     inviteRef,
@@ -2388,23 +2500,15 @@ class StoreRepository(private val db: FirebaseFirestore?) {
                     )
                 )
 
-                val newMember = StoreMember(
-                    userId = uid,
-                    displayName = invite.staffName.ifBlank { displayName.ifBlank { "Staff Member" } },
-                    email = email,
-                    role = invite.roleLabel.lowercase(),
-                    roleLabel = invite.roleLabel,
-                    permissionLevel = invite.permissionLevel,
-                    permissions = invite.permissions,
-                    status = "Active",
-                    joinedTime = now,
-                    invitedBy = invite.createdByUid
-                )
                 tx.set(memberRef, newMember)
 
-                val currentMemberUids = (storeSnap.get("memberUids") as? List<*>)?.filterIsInstance<String>() ?: emptyList()
-                val updatedUids = (currentMemberUids + uid).distinct()
-                tx.update(storeRef, "memberUids", updatedUids, "updatedAt", FieldValue.serverTimestamp())
+                tx.update(
+                    storeRef,
+                    mapOf(
+                        "memberUids" to FieldValue.arrayUnion(uid),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
 
                 tx.set(
                     userRef,
@@ -2421,8 +2525,38 @@ class StoreRepository(private val db: FirebaseFirestore?) {
             }.await()
 
             Result.success(storeIdResult)
+        } catch (e: FirebaseFirestoreException) {
+            val friendlyMessage = resolveBlockedJoinMessage(inviteRef, uid, e)
+            Result.failure(IllegalStateException(friendlyMessage, e))
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    private suspend fun resolveBlockedJoinMessage(
+        inviteRef: com.google.firebase.firestore.DocumentReference,
+        uid: String,
+        exception: FirebaseFirestoreException
+    ): String {
+        if (exception.code == FirebaseFirestoreException.Code.NOT_FOUND) {
+            return "Wrong invite code or store not found. Please check the code and try again."
+        }
+        val latestInvite = runCatching {
+            inviteRef.get().await().toObject(StoreInvite::class.java)
+        }.getOrNull()
+        return when {
+            latestInvite == null ->
+                "Wrong invite code. Please check the ${InviteCodeConfig.CODE_LENGTH}-character code and try again."
+            latestInvite.status == "cancelled" ->
+                "This invite code was cancelled by the store owner."
+            latestInvite.status == "used" ->
+                "This invite code has already been used."
+            System.currentTimeMillis() > latestInvite.expiresAt ->
+                "This invite code has expired. Please ask the store owner for a new invite."
+            latestInvite.createdByUid == uid ->
+                "You are already the owner of this store."
+            else ->
+                "Unable to join with this invite code. Please verify it is still active."
         }
     }
 
@@ -2466,9 +2600,11 @@ class StoreRepository(private val db: FirebaseFirestore?) {
                 if (it.userId == memberId) it.copy(status = "Removed") else it
             }
             val curStore = _demoStore.value
-            _demoStore.value = curStore.copy(
-                memberUids = curStore.memberUids.filter { it != memberId }
-            )
+            if (curStore != null) {
+                _demoStore.value = curStore.copy(
+                    memberUids = curStore.memberUids.filter { it != memberId }
+                )
+            }
             return
         }
 
@@ -2492,9 +2628,11 @@ class StoreRepository(private val db: FirebaseFirestore?) {
                 if (it.userId == memberId) it.copy(status = "Active") else it
             }
             val curStore = _demoStore.value
-            _demoStore.value = curStore.copy(
-                memberUids = (curStore.memberUids + memberId).distinct()
-            )
+            if (curStore != null) {
+                _demoStore.value = curStore.copy(
+                    memberUids = (curStore.memberUids + memberId).distinct()
+                )
+            }
             return
         }
 

@@ -97,9 +97,58 @@ fun BusinessScreen(
     modifier: Modifier = Modifier
 ) {
     val destination by storeViewModel.businessNavDestination.collectAsState()
+    val isOwner by storeViewModel.isOwner.collectAsState()
+    val canReports by storeViewModel.canViewReportsFlow.collectAsState()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
+    val canBaki by storeViewModel.canAccessCustomersAndBakiFlow.collectAsState()
+    val canSuppliers by storeViewModel.canAccessSuppliersAndPurchasesFlow.collectAsState()
+    val canStock by storeViewModel.canViewStockFlow.collectAsState()
+    val canHistory by storeViewModel.canSeeHistoryFlow.collectAsState()
+    val canCashBank by storeViewModel.canAccessCashAndBankFlow.collectAsState()
+    val canExpenses by storeViewModel.canAccessExpensesAndIncomeFlow.collectAsState()
+    val canNotes by storeViewModel.canAccessNotesFlow.collectAsState()
+
+    val isDestinationAllowed = when (destination) {
+        BusinessNavDestination.DASHBOARD -> canReports
+        BusinessNavDestination.BAKI_SCREEN -> canBaki
+        BusinessNavDestination.SUPPLIERS_SCREEN -> canSuppliers
+        BusinessNavDestination.LOW_STOCK_SCREEN -> canStock && canReports
+        BusinessNavDestination.SLOW_SELLERS_SCREEN -> canStock && canReports
+        BusinessNavDestination.REPORT_SALES -> canReports && canHistory
+        BusinessNavDestination.REPORT_PURCHASES -> canReports && canSuppliers
+        BusinessNavDestination.REPORT_DAY_BOOK -> canReports
+        BusinessNavDestination.REPORT_PROFIT_LOSS -> canReports && canSeeProfit
+        BusinessNavDestination.REPORT_CUSTOMER_STATEMENT -> canReports && canBaki
+        BusinessNavDestination.REPORT_SUPPLIER_STATEMENT -> canReports && canSuppliers
+        BusinessNavDestination.REPORT_INVENTORY -> canReports && canStock
+        BusinessNavDestination.MONTHLY_REPORT -> canReports && canSeeProfit
+        BusinessNavDestination.DATA_HEALTH_CHECK -> isOwner
+        BusinessNavDestination.TEST_CHECKLIST -> isOwner
+        BusinessNavDestination.CASH_BANK_SCREEN -> canCashBank
+        BusinessNavDestination.ACCOUNT_DETAILS_SCREEN -> canCashBank
+        BusinessNavDestination.EXPENSES_SCREEN -> canExpenses
+        BusinessNavDestination.OTHER_INCOMES_SCREEN -> canExpenses
+        BusinessNavDestination.MANAGE_CATEGORIES_SCREEN -> canExpenses
+        BusinessNavDestination.NOTES_SCREEN -> canNotes
+        BusinessNavDestination.REPORT_EXPENSES -> canReports && canExpenses
+        BusinessNavDestination.REPORT_INCOMES -> canReports && canExpenses
+        BusinessNavDestination.STAFF_MANAGEMENT_SCREEN -> isOwner
+        BusinessNavDestination.STAFF_MEMBER_DETAILS_SCREEN -> isOwner
+        BusinessNavDestination.REPORT_STAFF -> canReports
+    }
 
     BackHandler(enabled = destination != BusinessNavDestination.DASHBOARD) {
         storeViewModel.navigateBackInBusiness()
+    }
+
+    if (!isDestinationAllowed) {
+        com.example.ui.components.NoPermissionScreen(
+            onBack = if (destination != BusinessNavDestination.DASHBOARD) {
+                { storeViewModel.navigateBackInBusiness() }
+            } else null,
+            modifier = modifier
+        )
+        return
     }
 
     when (destination) {
@@ -276,15 +325,15 @@ fun BusinessDashboardScreen(
     val customRange by storeViewModel.businessCustomDateRange.collectAsState()
 
     val isOwner by storeViewModel.isOwner.collectAsState()
-    val canSeeProfit = storeViewModel.canSeeBuyingPriceAndProfit()
-    val canBaki = storeViewModel.canAccessCustomersAndBaki()
-    val canSuppliers = storeViewModel.canAccessSuppliersAndPurchases()
-    val canCashBank = storeViewModel.canAccessCashAndBank()
-    val canExpenses = storeViewModel.canAccessExpensesAndIncome()
-    val canNotes = storeViewModel.canAccessNotes()
-    val canReports = storeViewModel.canViewReports()
-    val canStock = storeViewModel.canViewStock()
-    val canHistory = storeViewModel.canSeeHistory()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
+    val canBaki by storeViewModel.canAccessCustomersAndBakiFlow.collectAsState()
+    val canSuppliers by storeViewModel.canAccessSuppliersAndPurchasesFlow.collectAsState()
+    val canCashBank by storeViewModel.canAccessCashAndBankFlow.collectAsState()
+    val canExpenses by storeViewModel.canAccessExpensesAndIncomeFlow.collectAsState()
+    val canNotes by storeViewModel.canAccessNotesFlow.collectAsState()
+    val canReports by storeViewModel.canViewReportsFlow.collectAsState()
+    val canStock by storeViewModel.canViewStockFlow.collectAsState()
+    val canHistory by storeViewModel.canSeeHistoryFlow.collectAsState()
 
     val financials by storeViewModel.businessFinancials.collectAsState()
     val moneyNow by storeViewModel.moneyNow.collectAsState()
@@ -486,14 +535,6 @@ fun BusinessDashboardScreen(
                 }
             }
         }
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(14.dp))
-            }
-        }
 
         // Sales Trend Chart (Day or Month)
         item {
@@ -619,14 +660,6 @@ fun BusinessDashboardScreen(
             }
         }
 
-        // Tappable Action Cards: Baki, Suppliers, Low Stock, Slow Sellers
-        item {
-            Column(
-                modifier = Modifier.padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                // Baki card (how many customers owe, total, tap opens Baki screen)
-                ActionSummaryCard(
         // Tappable Action Cards: Staff, Baki, Suppliers, Low Stock, Slow Sellers, Cash & Bank, Expenses, Notes
         item {
             Column(
@@ -771,7 +804,11 @@ fun BusinessDashboardScreen(
                     if (canHistory) {
                         ReportNavRow(
                             title = "Sales Report",
-                            description = "Invoices, customers, profit, Paid & Baki status",
+                            description = if (canSeeProfit) {
+                                "Invoices, customers, profit, Paid & Baki status"
+                            } else {
+                                "Invoices, customers, Paid & Baki status"
+                            },
                             icon = Icons.Default.ReceiptLong,
                             testTag = "report_link_sales",
                             onClick = { storeViewModel.navigateInBusiness(BusinessNavDestination.REPORT_SALES) }
@@ -847,7 +884,11 @@ fun BusinessDashboardScreen(
                     if (canStock) {
                         ReportNavRow(
                             title = "Inventory Report",
-                            description = "Stock, buying price, valuation, low stock filter",
+                            description = if (canSeeProfit) {
+                                "Stock, buying price, valuation, low stock filter"
+                            } else {
+                                "Stock, sell price, low stock filter"
+                            },
                             icon = Icons.Default.Inventory,
                             testTag = "report_link_inventory",
                             onClick = { storeViewModel.navigateInBusiness(BusinessNavDestination.REPORT_INVENTORY) }
@@ -857,7 +898,11 @@ fun BusinessDashboardScreen(
                     // Staff Performance Report
                     ReportNavRow(
                         title = if (currentLanguage == AppLanguage.BN) "স্টাফ পারফর্মেন্স রিপোর্ট" else "Staff Report",
-                        description = "Sales count, items sold, profit, payments received per staff member",
+                        description = if (canSeeProfit) {
+                            "Sales count, items sold, profit, payments received per staff member"
+                        } else {
+                            "Sales count, items sold, payments received per staff member"
+                        },
                         icon = Icons.Default.Badge,
                         testTag = "report_link_staff",
                         onClick = { storeViewModel.navigateInBusiness(BusinessNavDestination.REPORT_STAFF) }
@@ -1028,9 +1073,10 @@ fun BusinessDashboardScreen(
         }
     }
 }
+}
 
 @Composable
-private fun KpiStatCard(
+fun KpiStatCard(
     title: String,
     value: String,
     icon: ImageVector,
@@ -1429,7 +1475,11 @@ fun LowStockScreen(
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "${product.category.ifBlank { "General" }} • Buy: ৳${product.buyPrice.toInt()} • Sell: ৳${product.sellPrice.toInt()}",
+                                    text = if (storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState().value) {
+                                        "${product.category.ifBlank { "General" }} • Buy: ৳${product.buyPrice.toInt()} • Sell: ৳${product.sellPrice.toInt()}"
+                                    } else {
+                                        "${product.category.ifBlank { "General" }} • Sell: ৳${product.sellPrice.toInt()}"
+                                    },
                                     color = TextSecondary,
                                     fontSize = 12.sp
                                 )
@@ -1462,6 +1512,8 @@ fun SlowSellersScreen(
 ) {
     val currentLanguage by storeViewModel.currentLanguage.collectAsState()
     val slowSellers by storeViewModel.slowSellingProducts.collectAsState()
+
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
 
     Column(
         modifier = modifier
@@ -1529,23 +1581,29 @@ fun SlowSellersScreen(
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "Stock: ${product.stock} ${product.unit} • Buy: ৳${product.buyPrice.toInt()}",
+                                    text = if (canSeeProfit) {
+                                        "Stock: ${product.stock} ${product.unit} • Buy: ৳${product.buyPrice.toInt()}"
+                                    } else {
+                                        "Stock: ${product.stock} ${product.unit} • Sell: ৳${product.sellPrice.toInt()}"
+                                    },
                                     color = TextSecondary,
                                     fontSize = 12.sp
                                 )
                             }
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(
-                                    text = ShopLocale.formatMoney(lockedCapital, currentLanguage),
-                                    color = Color(0xFFB388FF),
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = if (currentLanguage == AppLanguage.BN) "আটকা মূলধন" else "Tied-Up Capital",
-                                    color = TextMuted,
-                                    fontSize = 11.sp
-                                )
+                            if (canSeeProfit) {
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        text = ShopLocale.formatMoney(lockedCapital, currentLanguage),
+                                        color = Color(0xFFB388FF),
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = if (currentLanguage == AppLanguage.BN) "আটকা মূলধন" else "Tied-Up Capital",
+                                        color = TextMuted,
+                                        fontSize = 11.sp
+                                    )
+                                }
                             }
                         }
                     }

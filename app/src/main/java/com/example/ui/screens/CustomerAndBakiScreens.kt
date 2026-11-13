@@ -274,16 +274,19 @@ fun BakiHubScreen(
                 testTag = "baki_search_input"
             )
             Spacer(modifier = Modifier.width(8.dp))
-            IconButton(
-                onClick = { showAddCustomerDialog = true },
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(Color(0x335DD62C)),
-                content = {
-                    Icon(Icons.Default.Add, contentDescription = "Add Customer", tint = VividGreen)
-                }
-            )
+            val canBaki by storeViewModel.canAccessCustomersAndBakiFlow.collectAsState()
+            if (canBaki) {
+                IconButton(
+                    onClick = { showAddCustomerDialog = true },
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(Color(0x335DD62C)),
+                    content = {
+                        Icon(Icons.Default.Add, contentDescription = "Add Customer", tint = VividGreen)
+                    }
+                )
+            }
         }
 
         // Main Content List
@@ -710,8 +713,10 @@ fun CustomerDetailsScreen(
                     maxLines = 1
                 )
             }
+            val canBaki by storeViewModel.canAccessCustomersAndBakiFlow.collectAsState()
+            val canReceivePayment by storeViewModel.canReceivePaymentFlow.collectAsState()
             val isCashSale = activeSummary.customer.name.equals("Cash Sale", ignoreCase = true)
-            if (!isCashSale) {
+            if (!isCashSale && canBaki) {
                 IconButton(
                     onClick = { showEditDialog = true },
                     modifier = Modifier
@@ -840,14 +845,17 @@ fun CustomerDetailsScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    VividButton(
-                        text = if (currentLanguage == AppLanguage.BN) "জমা নিন" else "Receive Payment",
-                        onClick = { showPaymentDialog = true },
-                        icon = Icons.Default.CallReceived,
-                        enabled = activeSummary.currentBalance > 0.001,
-                        modifier = Modifier.weight(1.3f),
-                        testTag = "receive_payment_btn"
-                    )
+                    val canReceivePaymentAction by storeViewModel.canReceivePaymentFlow.collectAsState()
+                    if (canReceivePaymentAction) {
+                        VividButton(
+                            text = if (currentLanguage == AppLanguage.BN) "জমা নিন" else "Receive Payment",
+                            onClick = { showPaymentDialog = true },
+                            icon = Icons.Default.CallReceived,
+                            enabled = activeSummary.currentBalance > 0.001,
+                            modifier = Modifier.weight(1.3f),
+                            testTag = "receive_payment_btn"
+                        )
+                    }
 
                     GlassOutlinedButton(
                         text = if (currentLanguage == AppLanguage.BN) "কল" else "Call",
@@ -1671,6 +1679,7 @@ fun AddEditCustomerDialog(
 fun CustomerPickerDialog(
     customerSummaries: List<CustomerBalanceSummary>,
     currentLanguage: AppLanguage,
+    canAddCustomer: Boolean = true,
     onDismiss: () -> Unit,
     onSelectCustomer: (Customer) -> Unit,
     onSelectCashSale: () -> Unit,
@@ -1754,26 +1763,28 @@ fun CustomerPickerDialog(
                         }
                     }
 
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = Color(0x335DD62C),
-                        border = BorderStroke(1.dp, VividGreen),
-                        modifier = Modifier
-                            .weight(1f)
-                            .clickable {
-                                onDismiss()
-                                onAddNewCustomer()
-                            }
-                            .testTag("picker_add_new_customer_btn")
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
+                    if (canAddCustomer) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = Color(0x335DD62C),
+                            border = BorderStroke(1.dp, VividGreen),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clickable {
+                                    onDismiss()
+                                    onAddNewCustomer()
+                                }
+                                .testTag("picker_add_new_customer_btn")
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = null, tint = VividGreen, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("+ New Customer", color = VividGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            Row(
+                                modifier = Modifier.padding(vertical = 10.dp, horizontal = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = null, tint = VividGreen, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("+ New Customer", color = VividGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                            }
                         }
                     }
                 }

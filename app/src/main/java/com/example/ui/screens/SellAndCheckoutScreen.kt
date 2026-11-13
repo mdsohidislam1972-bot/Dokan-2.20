@@ -75,9 +75,9 @@ import com.example.ui.components.DigitalReceiptContent
 import com.example.ui.components.GlassCard
 import com.example.ui.components.GlassOutlinedButton
 import com.example.ui.components.GlassTextField
+import com.example.ui.components.ProductThumbnail
 import com.example.ui.components.SlideToConfirmSale
 import com.example.ui.components.VividButton
-import com.example.ui.components.getCategoryIcon
 import com.example.ui.theme.AlertRed
 import com.example.ui.theme.AlertRedContainer
 import com.example.ui.theme.DarkBackground
@@ -331,21 +331,15 @@ fun SellProductTile(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Category Icon Box
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color(0x20FFFFFF)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = getCategoryIcon(product.category),
-                    contentDescription = null,
-                    tint = VividGreen,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
+            // Product photo or Category Icon fallback
+            ProductThumbnail(
+                photoUri = product.photoUri,
+                category = product.category,
+                contentDescription = product.name,
+                modifier = Modifier.size(50.dp),
+                iconSize = 24.dp,
+                cornerRadius = 14.dp
+            )
 
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -436,13 +430,21 @@ fun CheckoutBottomSheet(
     var completedReceipt by remember { mutableStateOf<CompletedSaleReceipt?>(null) }
 
     val allCustomerSummaries by storeViewModel.allCustomerSummaries.collectAsState()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
+    val canBaki by storeViewModel.canAccessCustomersAndBakiFlow.collectAsState()
     var showCustomerPicker by remember { mutableStateOf(false) }
     var showAddCustomerDialog by remember { mutableStateOf(false) }
+
+    if (!canBaki && selectedPaymentType == "baki") {
+        selectedPaymentType = "cash"
+        storeViewModel.setPaymentType("cash")
+    }
 
     if (showCustomerPicker) {
         CustomerPickerDialog(
             customerSummaries = allCustomerSummaries,
             currentLanguage = currentLanguage,
+            canAddCustomer = canBaki,
             onDismiss = { showCustomerPicker = false },
             onSelectCustomer = { cust ->
                 customerNameInput = cust.name
@@ -679,36 +681,38 @@ fun CheckoutBottomSheet(
                     }
                 }
 
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = if (selectedPaymentType == "baki") Color(0x33FFA000) else Color(0x20FFFFFF),
-                    border = BorderStroke(1.dp, if (selectedPaymentType == "baki") Color(0xFFFFB300) else GlassBorder),
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable {
-                            selectedPaymentType = "baki"
-                            storeViewModel.setPaymentType("baki")
-                        }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
+                if (canBaki) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (selectedPaymentType == "baki") Color(0x33FFA000) else Color(0x20FFFFFF),
+                        border = BorderStroke(1.dp, if (selectedPaymentType == "baki") Color(0xFFFFB300) else GlassBorder),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable {
+                                selectedPaymentType = "baki"
+                                storeViewModel.setPaymentType("baki")
+                            }
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.CreditCard,
-                            contentDescription = null,
-                            tint = if (selectedPaymentType == "baki") Color(0xFFFFB300) else TextMuted,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = "Baki (Credit)",
-                            color = if (selectedPaymentType == "baki") Color(0xFFFFB300) else TextPrimary,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
+                        Row(
+                            modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CreditCard,
+                                contentDescription = null,
+                                tint = if (selectedPaymentType == "baki") Color(0xFFFFB300) else TextMuted,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = "Baki (Credit)",
+                                color = if (selectedPaymentType == "baki") Color(0xFFFFB300) else TextPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }
@@ -866,7 +870,9 @@ fun CheckoutBottomSheet(
                     ) {
                         Column {
                             Text("Grand Total", color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                            Text("Profit: ${ShopLocale.formatMoney(cart.projectedProfit, currentLanguage)}", color = VividGreen, fontSize = 11.sp)
+                            if (canSeeProfit) {
+                                Text("Profit: ${ShopLocale.formatMoney(cart.projectedProfit, currentLanguage)}", color = VividGreen, fontSize = 11.sp)
+                            }
                         }
                         Text(
                             text = ShopLocale.formatMoney(cart.grandTotal, currentLanguage),

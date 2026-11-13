@@ -186,6 +186,9 @@ fun HistoryScreen(
     val isGrid by storeViewModel.productsSoldIsGrid.collectAsState()
     val selectedSale by storeViewModel.selectedSaleDetail.collectAsState()
     val customRange by storeViewModel.historyCustomDateRange.collectAsState()
+    val members by storeViewModel.members.collectAsState()
+    val store by storeViewModel.store.collectAsState()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
 
     var showDatePicker by remember { mutableStateOf(false) }
 
@@ -194,6 +197,9 @@ fun HistoryScreen(
         SaleDetailsScreen(
             sale = selectedSale!!,
             currentLanguage = currentLanguage,
+            members = members,
+            ownerUid = store?.ownerId ?: "",
+            canSeeProfit = canSeeProfit,
             onBack = { storeViewModel.selectSaleDetail(null) }
         )
         return
@@ -245,6 +251,7 @@ fun HistoryScreen(
         HistorySummaryCard(
             summary = summary,
             currentLanguage = currentLanguage,
+            canSeeProfit = canSeeProfit,
             modifier = Modifier.padding(horizontal = 16.dp)
         )
 
@@ -300,6 +307,8 @@ fun HistoryScreen(
             HistoryTransactionsList(
                 timelineItems = timelineItems,
                 currentLanguage = currentLanguage,
+                members = members,
+                ownerUid = store?.ownerId ?: "",
                 onSaleClick = { storeViewModel.selectSaleDetail(it) }
             )
         } else {
@@ -308,6 +317,7 @@ fun HistoryScreen(
                 productsSold = productsSold,
                 isGrid = isGrid,
                 currentLanguage = currentLanguage,
+                canSeeProfit = canSeeProfit,
                 onProductClick = { stat ->
                     onNavigateToStock(stat.productName)
                 }
@@ -437,6 +447,7 @@ fun HistoryFilterChips(
 fun HistorySummaryCard(
     summary: com.example.domain.PeriodFinancialSummary,
     currentLanguage: AppLanguage,
+    canSeeProfit: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     GlassCard(
@@ -497,23 +508,43 @@ fun HistorySummaryCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Profit
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = if (currentLanguage == AppLanguage.BN) "লাভ (Profit)" else "Profit",
-                        color = TextMuted,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = ShopLocale.formatMoney(summary.totalProfit, currentLanguage),
-                        color = VividGreen,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        maxLines = 1
-                    )
+                // Profit (or Items Sold if profit is masked)
+                if (canSeeProfit) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (currentLanguage == AppLanguage.BN) "লাভ (Profit)" else "Profit",
+                            color = TextMuted,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = ShopLocale.formatMoney(summary.totalProfit, currentLanguage),
+                            color = VividGreen,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
+                    }
+                } else {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (currentLanguage == AppLanguage.BN) "মোট পদ (Items)" else "Items Sold",
+                            color = TextMuted,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = ShopLocale.formatNumber(summary.totalItemsSold, currentLanguage),
+                            color = VividGreen,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            maxLines = 1
+                        )
+                    }
                 }
 
                 // Orders count
@@ -625,6 +656,8 @@ fun HistoryViewModeSwitcher(
 fun HistoryTransactionsList(
     timelineItems: List<HistoryTimelineItem>,
     currentLanguage: AppLanguage,
+    members: List<com.example.data.model.StoreMember> = emptyList(),
+    ownerUid: String = "",
     onSaleClick: (Sale) -> Unit
 ) {
     if (timelineItems.isEmpty()) {
@@ -727,6 +760,8 @@ fun HistoryTransactionsList(
                         HistorySaleRow(
                             sale = item.sale,
                             currentLanguage = currentLanguage,
+                            members = members,
+                            ownerUid = ownerUid,
                             onClick = { onSaleClick(item.sale) }
                         )
                     }
@@ -1067,6 +1102,8 @@ fun HistoryAdjustmentRow(
 fun HistorySaleRow(
     sale: Sale,
     currentLanguage: AppLanguage,
+    members: List<com.example.data.model.StoreMember> = emptyList(),
+    ownerUid: String = "",
     onClick: () -> Unit
 ) {
     val timeFormat = remember { SimpleDateFormat("hh:mm a", Locale.US) }
@@ -1074,6 +1111,8 @@ fun HistorySaleRow(
         sale.createdAt?.toDate()?.let { timeFormat.format(it) } ?: "--:--"
     }
     val isBaki = sale.paymentType == "baki"
+    val staffMember = remember(sale.soldBy, members) { members.find { it.userId == sale.soldBy } }
+    val creatorName = staffMember?.displayName ?: if (sale.soldBy == ownerUid && ownerUid.isNotBlank()) "Owner" else if (sale.soldBy.isNotBlank()) sale.soldBy else null
 
     GlassCard(
         modifier = Modifier.fillMaxWidth(),
@@ -1104,7 +1143,7 @@ fun HistorySaleRow(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = sale.customerName.ifBlank { "Cash Sale" },
+                    text = "${sale.customerName.ifBlank { "Cash Sale" }}${if (!creatorName.isNullOrBlank()) " • Made by: $creatorName" else ""}",
                     color = TextSecondary,
                     fontSize = 13.sp,
                     maxLines = 1,
@@ -1149,6 +1188,7 @@ fun HistoryProductsSoldList(
     productsSold: List<com.example.domain.ProductSoldStat>,
     isGrid: Boolean,
     currentLanguage: AppLanguage,
+    canSeeProfit: Boolean = true,
     onProductClick: (com.example.domain.ProductSoldStat) -> Unit
 ) {
     if (productsSold.isEmpty()) {
@@ -1222,14 +1262,16 @@ fun HistoryProductsSoldList(
                                 maxLines = 1
                             )
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = (if (currentLanguage == AppLanguage.BN) "লাভ: " else "Profit: ") +
-                                    ShopLocale.formatMoney(stat.totalProfit, currentLanguage),
-                            color = TextMuted,
-                            fontSize = 11.sp,
-                            maxLines = 1
-                        )
+                        if (canSeeProfit) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = (if (currentLanguage == AppLanguage.BN) "লাভ: " else "Profit: ") +
+                                        ShopLocale.formatMoney(stat.totalProfit, currentLanguage),
+                                color = TextMuted,
+                                fontSize = 11.sp,
+                                maxLines = 1
+                            )
+                        }
                     }
                 }
             }
@@ -1261,14 +1303,16 @@ fun HistoryProductsSoldList(
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = (if (currentLanguage == AppLanguage.BN) "মোট লাভ: " else "Profit: ") +
-                                        ShopLocale.formatMoney(stat.totalProfit, currentLanguage),
-                                color = TextMuted,
-                                fontSize = 12.sp,
-                                maxLines = 1
-                            )
+                            if (canSeeProfit) {
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = (if (currentLanguage == AppLanguage.BN) "মোট লাভ: " else "Profit: ") +
+                                            ShopLocale.formatMoney(stat.totalProfit, currentLanguage),
+                                    color = TextMuted,
+                                    fontSize = 12.sp,
+                                    maxLines = 1
+                                )
+                            }
                         }
 
                         Column(horizontalAlignment = Alignment.End) {
@@ -1304,6 +1348,9 @@ fun HistoryProductsSoldList(
 fun SaleDetailsScreen(
     sale: Sale,
     currentLanguage: AppLanguage,
+    members: List<com.example.data.model.StoreMember> = emptyList(),
+    ownerUid: String = "",
+    canSeeProfit: Boolean = true,
     onBack: () -> Unit
 ) {
     androidx.activity.compose.BackHandler(onBack = onBack)
@@ -1422,9 +1469,10 @@ fun SaleDetailsScreen(
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
+                        val staffMember = remember(sale.soldBy, members) { members.find { it.userId == sale.soldBy } }
+                        val creatorName = staffMember?.displayName ?: if (sale.soldBy == ownerUid && ownerUid.isNotBlank()) "Owner" else sale.soldBy.ifBlank { "Store Staff" }
                         Text(
-                            text = (if (currentLanguage == AppLanguage.BN) "বিক্রয়কারী: " else "Sold by: ") +
-                                    (sale.soldBy.ifBlank { "Store Staff" }),
+                            text = (if (currentLanguage == AppLanguage.BN) "তৈরি করেছেন: " else "Made by: ") + creatorName,
                             color = TextMuted,
                             fontSize = 11.sp,
                             maxLines = 1

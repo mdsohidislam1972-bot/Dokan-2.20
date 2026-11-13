@@ -2297,8 +2297,8 @@ object CalculationEngine {
                 }
             }
             val memberPayments = periodPayments.filter { pay ->
-                if (pay.createdBy.isNotBlank()) {
-                    pay.createdBy == member.userId
+                if (pay.receivedBy.isNotBlank()) {
+                    pay.receivedBy == member.userId
                 } else {
                     member.userId == ownerUid
                 }

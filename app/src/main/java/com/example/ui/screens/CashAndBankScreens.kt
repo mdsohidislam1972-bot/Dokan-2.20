@@ -582,6 +582,7 @@ fun AccountDetailsScreen(
     val context = LocalContext.current
     var showAdjustDialog by remember { mutableStateOf(false) }
     var showArchiveConfirm by remember { mutableStateOf(false) }
+    val isOwner by storeViewModel.isOwner.collectAsState()
     var showDatePicker by remember { mutableStateOf(false) }
 
     BackHandler {
@@ -716,35 +717,37 @@ fun AccountDetailsScreen(
                     )
                 }
 
-                // Action buttons: Adjust & Archive
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GlassOutlinedButton(
-                        text = "Adjust",
-                        onClick = { showAdjustDialog = true },
-                        icon = Icons.Default.Edit,
-                        testTag = "btn_adjust_balance"
-                    )
+                // Action buttons: Adjust & Archive (Owner only)
+                if (isOwner) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        GlassOutlinedButton(
+                            text = "Adjust",
+                            onClick = { showAdjustDialog = true },
+                            icon = Icons.Default.Edit,
+                            testTag = "btn_adjust_balance"
+                        )
 
-                    if (!account.isDefault && account.id != "cash_in_hand") {
-                        IconButton(
-                            onClick = {
-                                if (abs(currentBalance) > 0.001) {
-                                    Toast.makeText(
-                                        context,
-                                        "Account can only be archived when balance is ৳0.00 (current: ৳${"%.2f".format(currentBalance)})",
-                                        Toast.LENGTH_LONG
-                                    ).show()
-                                } else {
-                                    showArchiveConfirm = true
-                                }
-                            },
-                            modifier = Modifier.testTag("btn_archive_account")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Archive,
-                                contentDescription = "Archive Account",
-                                tint = if (abs(currentBalance) <= 0.001) TextSecondary else TextMuted
-                            )
+                        if (!account.isDefault && account.id != "cash_in_hand") {
+                            IconButton(
+                                onClick = {
+                                    if (abs(currentBalance) > 0.001) {
+                                        Toast.makeText(
+                                            context,
+                                            "Account can only be archived when balance is ৳0.00 (current: ৳${"%.2f".format(currentBalance)})",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    } else {
+                                        showArchiveConfirm = true
+                                    }
+                                },
+                                modifier = Modifier.testTag("btn_archive_account")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Archive,
+                                    contentDescription = "Archive Account",
+                                    tint = if (abs(currentBalance) <= 0.001) TextSecondary else TextMuted
+                                )
+                            }
                         }
                     }
                 }

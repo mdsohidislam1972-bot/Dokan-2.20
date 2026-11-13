@@ -92,6 +92,7 @@ fun SalesReportScreen(
     val customRange by storeViewModel.businessCustomDateRange.collectAsState()
     val sales by storeViewModel.businessFilteredSales.collectAsState()
     val store by storeViewModel.store.collectAsState()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
 
     val dateFormat = remember { SimpleDateFormat("dd MMM, hh:mm a", Locale.US) }
     val nowFormatted = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.US).format(Date()) }
@@ -118,29 +119,59 @@ fun SalesReportScreen(
         val rows = sales.map { s ->
             val dateStr = s.createdAt?.toDate()?.let { dateFormat.format(it) } ?: "—"
             val status = if (s.paymentType == "baki") "Baki" else "Paid"
-            listOf(
-                s.invoiceNo,
-                dateStr,
-                s.customerName,
-                ShopLocale.formatMoney(s.grandTotal, currentLanguage),
-                ShopLocale.formatMoney(s.discount, currentLanguage),
-                ShopLocale.formatMoney(s.profit, currentLanguage),
-                status
-            )
+            if (canSeeProfit) {
+                listOf(
+                    s.invoiceNo,
+                    dateStr,
+                    s.customerName,
+                    ShopLocale.formatMoney(s.grandTotal, currentLanguage),
+                    ShopLocale.formatMoney(s.discount, currentLanguage),
+                    ShopLocale.formatMoney(s.profit, currentLanguage),
+                    status
+                )
+            } else {
+                listOf(
+                    s.invoiceNo,
+                    dateStr,
+                    s.customerName,
+                    ShopLocale.formatMoney(s.grandTotal, currentLanguage),
+                    ShopLocale.formatMoney(s.discount, currentLanguage),
+                    status
+                )
+            }
         }
         val rawRows = sales.map { s ->
-            listOf(null, null, null, s.grandTotal, s.discount, s.profit, null)
+            if (canSeeProfit) {
+                listOf(null, null, null, s.grandTotal, s.discount, s.profit, null)
+            } else {
+                listOf(null, null, null, s.grandTotal, s.discount, null)
+            }
         }
-        val totals = listOf(
-            "TOTAL (${sales.size} orders)",
-            "",
-            "",
-            ShopLocale.formatMoney(totalAmount, currentLanguage),
-            ShopLocale.formatMoney(totalDiscount, currentLanguage),
-            ShopLocale.formatMoney(totalProfit, currentLanguage),
-            ""
-        )
-        val rawTotals = listOf(null, null, null, totalAmount, totalDiscount, totalProfit, null)
+        val totals = if (canSeeProfit) {
+            listOf(
+                "TOTAL (${sales.size} orders)",
+                "",
+                "",
+                ShopLocale.formatMoney(totalAmount, currentLanguage),
+                ShopLocale.formatMoney(totalDiscount, currentLanguage),
+                ShopLocale.formatMoney(totalProfit, currentLanguage),
+                ""
+            )
+        } else {
+            listOf(
+                "TOTAL (${sales.size} orders)",
+                "",
+                "",
+                ShopLocale.formatMoney(totalAmount, currentLanguage),
+                ShopLocale.formatMoney(totalDiscount, currentLanguage),
+                ""
+            )
+        }
+        val rawTotals = if (canSeeProfit) {
+            listOf(null, null, null, totalAmount, totalDiscount, totalProfit, null)
+        } else {
+            listOf(null, null, null, totalAmount, totalDiscount, null)
+        }
 
         return ReportTableData(
             title = "Sales Report",
@@ -149,9 +180,13 @@ fun SalesReportScreen(
             storeAddress = store?.address ?: "",
             periodLabel = period.labelEn,
             generatedAt = nowFormatted,
-            headers = listOf("Invoice", "Date", "Customer", "Total", "Discount", "Profit", "Status"),
+            headers = if (canSeeProfit) {
+                listOf("Invoice", "Date", "Customer", "Total", "Discount", "Profit", "Status")
+            } else {
+                listOf("Invoice", "Date", "Customer", "Total", "Discount", "Status")
+            },
             rows = rows,
-            numericColumns = setOf(3, 4, 5),
+            numericColumns = if (canSeeProfit) setOf(3, 4, 5) else setOf(3, 4),
             rawNumbers = rawRows,
             totals = totals,
             rawTotals = rawTotals
@@ -214,7 +249,11 @@ fun SalesReportScreen(
             ) {
                 item {
                     ReportTableHeaderRow(
-                        headers = listOf("Invoice / Date", "Customer", "Total", "Profit")
+                        headers = if (canSeeProfit) {
+                            listOf("Invoice / Date", "Customer", "Total", "Profit")
+                        } else {
+                            listOf("Invoice / Date", "Customer", "Total")
+                        }
                     )
                 }
 
@@ -271,14 +310,16 @@ fun SalesReportScreen(
                                 textAlign = TextAlign.End,
                                 modifier = Modifier.weight(1f)
                             )
-                            Text(
-                                text = ShopLocale.formatMoney(s.profit, currentLanguage),
-                                color = VividGreen,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Bold,
-                                textAlign = TextAlign.End,
-                                modifier = Modifier.weight(1f)
-                            )
+                            if (canSeeProfit) {
+                                Text(
+                                    text = ShopLocale.formatMoney(s.profit, currentLanguage),
+                                    color = VividGreen,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    textAlign = TextAlign.End,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                         }
                     }
                 }
@@ -289,7 +330,7 @@ fun SalesReportScreen(
                         label = "TOTAL (${sales.size} Orders)",
                         subValue = "Discounts: ${ShopLocale.formatMoney(totalDiscount, currentLanguage)}",
                         mainValue = ShopLocale.formatMoney(totalAmount, currentLanguage),
-                        profitValue = "Profit: ${ShopLocale.formatMoney(totalProfit, currentLanguage)}"
+                        profitValue = if (canSeeProfit) "Profit: ${ShopLocale.formatMoney(totalProfit, currentLanguage)}" else ""
                     )
                 }
             }
@@ -744,6 +785,16 @@ fun ProfitAndLossScreen(
     val isStockBased by storeViewModel.isPnlStockBased.collectAsState()
     val pnl by storeViewModel.pnlStatement.collectAsState()
     val store by storeViewModel.store.collectAsState()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
+    val canViewReports by storeViewModel.canViewReportsFlow.collectAsState()
+
+    if (!canSeeProfit || !canViewReports) {
+        com.example.ui.components.NoPermissionScreen(
+            onBack = { storeViewModel.navigateBackInBusiness() },
+            modifier = modifier
+        )
+        return
+    }
 
     val nowFormatted = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.US).format(Date()) }
 
@@ -1542,6 +1593,7 @@ fun InventoryReportScreen(
     val currentLanguage by storeViewModel.currentLanguage.collectAsState()
     val products by storeViewModel.products.collectAsState()
     val store by storeViewModel.store.collectAsState()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
 
     var lowStockFilterOnly by remember { mutableStateOf(false) }
 
@@ -1556,25 +1608,48 @@ fun InventoryReportScreen(
 
     fun buildReportData(): ReportTableData {
         val rows = filteredProducts.map { p ->
-            val costVal = p.stock * p.buyPrice
-            listOf(
-                p.name,
-                "${p.stock} ${p.unit}",
-                ShopLocale.formatMoney(p.buyPrice, currentLanguage),
-                ShopLocale.formatMoney(p.sellPrice, currentLanguage),
-                ShopLocale.formatMoney(costVal, currentLanguage)
-            )
+            if (canSeeProfit) {
+                val costVal = p.stock * p.buyPrice
+                listOf(
+                    p.name,
+                    "${p.stock} ${p.unit}",
+                    ShopLocale.formatMoney(p.buyPrice, currentLanguage),
+                    ShopLocale.formatMoney(p.sellPrice, currentLanguage),
+                    ShopLocale.formatMoney(costVal, currentLanguage)
+                )
+            } else {
+                val saleVal = p.stock * p.sellPrice
+                listOf(
+                    p.name,
+                    "${p.stock} ${p.unit}",
+                    ShopLocale.formatMoney(p.sellPrice, currentLanguage),
+                    ShopLocale.formatMoney(saleVal, currentLanguage)
+                )
+            }
         }
         val rawRows = filteredProducts.map { p ->
-            listOf(null, p.stock.toDouble(), p.buyPrice, p.sellPrice, p.stock * p.buyPrice)
+            if (canSeeProfit) {
+                listOf(null, p.stock.toDouble(), p.buyPrice, p.sellPrice, p.stock * p.buyPrice)
+            } else {
+                listOf(null, p.stock.toDouble(), p.sellPrice, p.stock * p.sellPrice)
+            }
         }
-        val totals = listOf(
-            "TOTAL (${filteredProducts.size} Products)",
-            "$totalItemsCount items",
-            "",
-            "",
-            ShopLocale.formatMoney(totalCostValue, currentLanguage)
-        )
+        val totals = if (canSeeProfit) {
+            listOf(
+                "TOTAL (${filteredProducts.size} Products)",
+                "$totalItemsCount items",
+                "",
+                "",
+                ShopLocale.formatMoney(totalCostValue, currentLanguage)
+            )
+        } else {
+            listOf(
+                "TOTAL (${filteredProducts.size} Products)",
+                "$totalItemsCount items",
+                "",
+                ShopLocale.formatMoney(totalSaleValue, currentLanguage)
+            )
+        }
         return ReportTableData(
             title = "Inventory Valuation Report${if (lowStockFilterOnly) " (Low Stock Only)" else ""}",
             storeName = store?.name ?: "StoreOS Dokan",
@@ -1582,9 +1657,13 @@ fun InventoryReportScreen(
             storeAddress = store?.address ?: "",
             periodLabel = "As of $nowFormatted",
             generatedAt = nowFormatted,
-            headers = listOf("Product", "Stock", "Buy Price", "Sell Price", "Cost Value"),
+            headers = if (canSeeProfit) {
+                listOf("Product", "Stock", "Buy Price", "Sell Price", "Cost Value")
+            } else {
+                listOf("Product", "Stock", "Sell Price", "Sale Value")
+            },
             rows = rows,
-            numericColumns = setOf(1, 2, 3, 4),
+            numericColumns = if (canSeeProfit) setOf(1, 2, 3, 4) else setOf(1, 2, 3),
             rawNumbers = rawRows,
             totals = totals
         )
@@ -1668,7 +1747,11 @@ fun InventoryReportScreen(
             ) {
                 item {
                     ReportTableHeaderRow(
-                        headers = listOf("Product", "Qty / Unit", "Buy / Sell", "Cost Value")
+                        headers = if (canSeeProfit) {
+                            listOf("Product", "Qty / Unit", "Buy / Sell", "Cost Value")
+                        } else {
+                            listOf("Product", "Qty / Unit", "Sell Price", "Sale Value")
+                        }
                     )
                 }
 
@@ -1712,11 +1795,17 @@ fun InventoryReportScreen(
                                 modifier = Modifier.weight(1f)
                             )
                             Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                                Text(text = "৳${p.buyPrice.toInt()}", color = TextSecondary, fontSize = 11.5.sp)
+                                if (canSeeProfit) {
+                                    Text(text = "৳${p.buyPrice.toInt()}", color = TextSecondary, fontSize = 11.5.sp)
+                                }
                                 Text(text = "৳${p.sellPrice.toInt()}", color = VividGreen, fontSize = 11.5.sp)
                             }
                             Text(
-                                text = "৳${(p.stock * p.buyPrice).toInt()}",
+                                text = if (canSeeProfit) {
+                                    "৳${(p.stock * p.buyPrice).toInt()}"
+                                } else {
+                                    "৳${(p.stock * p.sellPrice).toInt()}"
+                                },
                                 color = TextPrimary,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,
@@ -1730,9 +1819,9 @@ fun InventoryReportScreen(
                 item {
                     Spacer(modifier = Modifier.height(6.dp))
                     ReportTableTotalsBar(
-                        label = "TOTAL COST VALUE",
-                        subValue = "Sale Value: ৳${totalSaleValue.toInt()}",
-                        mainValue = ShopLocale.formatMoney(totalCostValue, currentLanguage),
+                        label = if (canSeeProfit) "TOTAL COST VALUE" else "TOTAL SALE VALUE",
+                        subValue = if (canSeeProfit) "Sale Value: ৳${totalSaleValue.toInt()}" else "${filteredProducts.size} products",
+                        mainValue = ShopLocale.formatMoney(if (canSeeProfit) totalCostValue else totalSaleValue, currentLanguage),
                         profitValue = "$totalItemsCount total items"
                     )
                 }

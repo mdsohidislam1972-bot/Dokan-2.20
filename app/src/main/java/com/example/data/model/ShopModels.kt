@@ -95,8 +95,38 @@ data class StoreMember(
     val permissions: Map<String, Boolean> = StorePermissions.defaultOwnerPermissions(),
     val status: String = "Active", // "Active", "Pending", "Removed"
     val joinedTime: Long = System.currentTimeMillis(),
-    val invitedBy: String = ""
+    val invitedBy: String = "",
+    val inviteCode: String = ""
 )
+
+object InviteCodeConfig {
+    const val CODE_LENGTH = 8
+    // Uppercase letters & digits without confusing characters (O, 0, I, 1, L)
+    const val ALLOWED_CHARS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+    const val EXAMPLE_CODE = "K7M9P2XQ"
+    private val secureRandom = java.security.SecureRandom()
+
+    fun generate(): String {
+        return buildString(CODE_LENGTH) {
+            repeat(CODE_LENGTH) {
+                append(ALLOWED_CHARS[secureRandom.nextInt(ALLOWED_CHARS.length)])
+            }
+        }
+    }
+
+    fun normalize(raw: String): String {
+        return raw.trim().replace(Regex("\\s+"), "").uppercase()
+    }
+
+    fun sanitizeInput(raw: String): String {
+        return raw.filter { it.isLetterOrDigit() }.uppercase().take(CODE_LENGTH)
+    }
+
+    fun isValidFormat(raw: String): Boolean {
+        val normalized = normalize(raw)
+        return normalized.length == CODE_LENGTH && normalized.all { it in ALLOWED_CHARS }
+    }
+}
 
 @IgnoreExtraProperties
 data class StoreInvite(

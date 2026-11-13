@@ -91,6 +91,16 @@ fun MonthlyReportScreen(
     val month by storeViewModel.monthlyReportMonth.collectAsState()
     val reportData by storeViewModel.monthlyReportData.collectAsState()
     val store by storeViewModel.store.collectAsState()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
+    val canViewReports by storeViewModel.canViewReportsFlow.collectAsState()
+
+    if (!canSeeProfit || !canViewReports) {
+        com.example.ui.components.NoPermissionScreen(
+            onBack = { storeViewModel.navigateBackInBusiness() },
+            modifier = modifier
+        )
+        return
+    }
 
     var showExportLanguageModal by remember { mutableStateOf(false) }
     var selectedExportFormat by remember { mutableStateOf("PDF") } // "PDF" or "CSV"
@@ -101,46 +111,88 @@ fun MonthlyReportScreen(
 
     fun buildMonthlyReportTableData(lang: AppLanguage): ReportTableData {
         val isBn = lang == AppLanguage.BN
-        val headers = if (isBn) {
-            listOf("পণ্য", "বিক্রিত পরিমাণ", "মোট বিক্রয়", "লাভ")
+        val headers = if (canSeeProfit) {
+            if (isBn) listOf("পণ্য", "বিক্রিত পরিমাণ", "মোট বিক্রয়", "লাভ")
+            else listOf("Product", "Quantity Sold", "Total Amount", "Profit")
         } else {
-            listOf("Product", "Quantity Sold", "Total Amount", "Profit")
+            if (isBn) listOf("পণ্য", "বিক্রিত পরিমাণ", "মোট বিক্রয়")
+            else listOf("Product", "Quantity Sold", "Total Amount")
         }
 
         val rows = reportData.itemsSold.map { stat ->
-            listOf(
-                stat.productName,
-                "${stat.quantitySold} ${stat.unit}",
-                ShopLocale.formatMoney(stat.totalSalesAmount, lang),
-                ShopLocale.formatMoney(stat.totalProfit, lang)
-            )
+            if (canSeeProfit) {
+                listOf(
+                    stat.productName,
+                    "${stat.quantitySold} ${stat.unit}",
+                    ShopLocale.formatMoney(stat.totalSalesAmount, lang),
+                    ShopLocale.formatMoney(stat.totalProfit, lang)
+                )
+            } else {
+                listOf(
+                    stat.productName,
+                    "${stat.quantitySold} ${stat.unit}",
+                    ShopLocale.formatMoney(stat.totalSalesAmount, lang)
+                )
+            }
         }
         val rawRows = reportData.itemsSold.map { stat ->
-            listOf(null, stat.quantitySold.toDouble(), stat.totalSalesAmount, stat.totalProfit)
+            if (canSeeProfit) {
+                listOf(null, stat.quantitySold.toDouble(), stat.totalSalesAmount, stat.totalProfit)
+            } else {
+                listOf(null, stat.quantitySold.toDouble(), stat.totalSalesAmount)
+            }
         }
 
-        val totals = if (isBn) {
-            listOf(
-                "সর্বমোট (${reportData.totalOrders} অর্ডার)",
-                "${reportData.totalItemsSold} আইটেম",
-                ShopLocale.formatMoney(reportData.totalSales, lang),
-                ShopLocale.formatMoney(reportData.totalProfit, lang)
-            )
+        val totals = if (canSeeProfit) {
+            if (isBn) {
+                listOf(
+                    "সর্বমোট (${reportData.totalOrders} অর্ডার)",
+                    "${reportData.totalItemsSold} আইটেম",
+                    ShopLocale.formatMoney(reportData.totalSales, lang),
+                    ShopLocale.formatMoney(reportData.totalProfit, lang)
+                )
+            } else {
+                listOf(
+                    "TOTAL (${reportData.totalOrders} Orders)",
+                    "${reportData.totalItemsSold} items",
+                    ShopLocale.formatMoney(reportData.totalSales, lang),
+                    ShopLocale.formatMoney(reportData.totalProfit, lang)
+                )
+            }
         } else {
-            listOf(
-                "TOTAL (${reportData.totalOrders} Orders)",
-                "${reportData.totalItemsSold} items",
-                ShopLocale.formatMoney(reportData.totalSales, lang),
-                ShopLocale.formatMoney(reportData.totalProfit, lang)
-            )
+            if (isBn) {
+                listOf(
+                    "সর্বমোট (${reportData.totalOrders} অর্ডার)",
+                    "${reportData.totalItemsSold} আইটেম",
+                    ShopLocale.formatMoney(reportData.totalSales, lang)
+                )
+            } else {
+                listOf(
+                    "TOTAL (${reportData.totalOrders} Orders)",
+                    "${reportData.totalItemsSold} items",
+                    ShopLocale.formatMoney(reportData.totalSales, lang)
+                )
+            }
         }
-        val rawTotals = listOf(null, reportData.totalItemsSold.toDouble(), reportData.totalSales, reportData.totalProfit)
+        val rawTotals = if (canSeeProfit) {
+            listOf(null, reportData.totalItemsSold.toDouble(), reportData.totalSales, reportData.totalProfit)
+        } else {
+            listOf(null, reportData.totalItemsSold.toDouble(), reportData.totalSales)
+        }
 
         val title = if (isBn) "মাসিক পারফরম্যান্স রিপোর্ট: $currentMonthLabel" else "Monthly Performance Report: $currentMonthLabel"
-        val notes = if (isBn) {
-            "মজুদ পণ্যের মূল্য: ৳${reportData.stockValueAtCost.toInt()} | পাওনা বাকি: ৳${reportData.bakiCustomersOwe.toInt()} | মহাজন দেনা: ৳${reportData.debtToSuppliers.toInt()}"
+        val notes = if (canSeeProfit) {
+            if (isBn) {
+                "মজুদ পণ্যের মূল্য: ৳${reportData.stockValueAtCost.toInt()} | পাওনা বাকি: ৳${reportData.bakiCustomersOwe.toInt()} | মহাজন দেনা: ৳${reportData.debtToSuppliers.toInt()}"
+            } else {
+                "Stock Value: ৳${reportData.stockValueAtCost.toInt()} | Total Baki: ৳${reportData.bakiCustomersOwe.toInt()} | Supplier Debt: ৳${reportData.debtToSuppliers.toInt()}"
+            }
         } else {
-            "Stock Value: ৳${reportData.stockValueAtCost.toInt()} | Total Baki: ৳${reportData.bakiCustomersOwe.toInt()} | Supplier Debt: ৳${reportData.debtToSuppliers.toInt()}"
+            if (isBn) {
+                "পাওনা বাকি: ৳${reportData.bakiCustomersOwe.toInt()} | মহাজন দেনা: ৳${reportData.debtToSuppliers.toInt()}"
+            } else {
+                "Total Baki: ৳${reportData.bakiCustomersOwe.toInt()} | Supplier Debt: ৳${reportData.debtToSuppliers.toInt()}"
+            }
         }
 
         return ReportTableData(
@@ -152,7 +204,7 @@ fun MonthlyReportScreen(
             generatedAt = nowFormatted,
             headers = headers,
             rows = rows,
-            numericColumns = setOf(1, 2, 3),
+            numericColumns = if (canSeeProfit) setOf(1, 2, 3) else setOf(1, 2),
             rawNumbers = rawRows,
             totals = totals,
             rawTotals = rawTotals,
@@ -294,12 +346,14 @@ fun MonthlyReportScreen(
                         color = VividGreen,
                         modifier = Modifier.weight(1f)
                     )
-                    SummaryPill(
-                        title = "Total Profit",
-                        value = ShopLocale.formatMoney(reportData.totalProfit, currentLanguage),
-                        color = Color(0xFF00E5FF),
-                        modifier = Modifier.weight(1f)
-                    )
+                    if (canSeeProfit) {
+                        SummaryPill(
+                            title = "Total Profit",
+                            value = ShopLocale.formatMoney(reportData.totalProfit, currentLanguage),
+                            color = Color(0xFF00E5FF),
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                     SummaryPill(
                         title = "Orders Completed",
                         value = "${reportData.totalOrders}",
@@ -325,9 +379,11 @@ fun MonthlyReportScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(text = "Stock at Cost", color = TextSecondary, fontSize = 11.sp)
-                                Text(text = ShopLocale.formatMoney(reportData.stockValueAtCost, currentLanguage), color = TextPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
+                            if (canSeeProfit) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(text = "Stock at Cost", color = TextSecondary, fontSize = 11.sp)
+                                    Text(text = ShopLocale.formatMoney(reportData.stockValueAtCost, currentLanguage), color = TextPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(text = "Total Customer Baki", color = TextSecondary, fontSize = 11.sp)
@@ -420,7 +476,9 @@ fun MonthlyReportScreen(
                                     }
                                     Column(horizontalAlignment = Alignment.End) {
                                         Text(text = ShopLocale.formatMoney(item.totalSalesAmount, currentLanguage), color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                        Text(text = "+${ShopLocale.formatMoney(item.totalProfit, currentLanguage)} profit", color = VividGreen, fontSize = 11.sp)
+                                        if (canSeeProfit) {
+                                            Text(text = "+${ShopLocale.formatMoney(item.totalProfit, currentLanguage)} profit", color = VividGreen, fontSize = 11.sp)
+                                        }
                                     }
                                 }
                                 if (idx < reportData.itemsSold.size - 1) {

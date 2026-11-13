@@ -30,7 +30,10 @@ import com.example.data.model.AccountAdjustment
 import com.example.data.model.Expense
 import com.example.data.model.OtherIncome
 import com.example.data.model.StoreCategory
+import com.example.data.model.StoreInvite
+import com.example.data.model.StoreMember
 import com.example.data.model.StoreNote
+import com.example.data.model.StorePermissions
 import com.example.data.model.SupplierPayment
 import com.example.data.model.AccountStatementReport
 import com.example.data.model.AccountStatementEntry
@@ -46,12 +49,19 @@ import com.example.domain.HealthProblem
 import java.util.Calendar
 import com.example.util.AppLanguage
 import com.example.util.NetworkMonitor
+import com.example.util.StockPreferences
 import com.example.util.SyncStatus
+import com.google.firebase.firestore.FirebaseFirestoreException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -166,6 +176,22 @@ class StoreViewModel(
     private val _currentLanguage = MutableStateFlow(AppLanguage.EN)
     val currentLanguage: StateFlow<AppLanguage> = _currentLanguage.asStateFlow()
 
+    private val stockPreferences = StockPreferences(repository.appContext)
+
+    val isStockGridView: StateFlow<Boolean> = stockPreferences.isStockGridView
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    fun toggleStockViewMode() {
+        val next = !isStockGridView.value
+        viewModelScope.launch {
+            stockPreferences.setStockGridView(next)
+        }
+    }
+
+    fun clearErrorMessage() {
+        _errorMessage.value = null
+    }
+
     // Status notifications
     private val _statusMessage = MutableStateFlow<String?>(null)
     val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
@@ -191,13 +217,139 @@ class StoreViewModel(
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), SyncStatus.ONLINE)
     }
 
+    private val _accessRevoked = MutableStateFlow(false)
+
+    private fun isPermissionDenied(t: Throwable): Boolean {
+        var cur: Throwable? = t
+        while (cur != null) {
+            if (cur is FirebaseFirestoreException && cur.code == FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                return true
+            }
+            cur = cur.cause
+        }
+        return false
+    }
+
+    private fun <T> Flow<List<T>>.orEmptyOnDenied(onDenied: (() -> Unit)? = null): Flow<List<T>> =
+        catch { e ->
+            if (isPermissionDenied(e)) {
+                onDenied?.invoke()
+                emit(emptyList())
+            } else {
+                throw e
+            }
+        }
+
     // Store profile
     val store: StateFlow<Store?> = repository.observeStore(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
+        .catch { e ->
+            if (isPermissionDenied(e)) {
+                _accessRevoked.value = true
+                emit(null)
+            } else {
+                throw e
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val isOwner: StateFlow<Boolean> = combine(store, MutableStateFlow(currentUserId)) { s, uid ->
+        s != null && (s.ownerId == uid || (storeId == "demo_store" && uid == "demo_user"))
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private val myMemberDoc: StateFlow<StoreMember?> = repository.observeMyMember(storeId, currentUserId)
+        .catch { e ->
+            if (isPermissionDenied(e)) {
+                _accessRevoked.value = true
+                emit(null)
+            } else {
+                throw e
+            }
+        }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val currentMember: StateFlow<StoreMember?> = combine(myMemberDoc, store, isOwner) { myMem, _, owner ->
+        if (owner) {
+            StoreMember(
+                userId = currentUserId,
+                displayName = "Owner",
+                roleLabel = "Owner",
+                permissionLevel = "Full",
+                permissions = StorePermissions.defaultOwnerPermissions(),
+                status = "Active"
+            )
+        } else {
+            myMem
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val isRemoved: StateFlow<Boolean> = combine(myMemberDoc, isOwner, _accessRevoked, store) { mem, owner, revoked, st ->
+        !owner && (
+            revoked ||
+                (mem != null && mem.status.equals("Removed", ignoreCase = true)) ||
+                (st != null && !st.memberUids.contains(currentUserId))
+            )
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    private fun permissionStateFlow(key: String): StateFlow<Boolean> =
+        combine(isOwner, currentMember, isRemoved) { owner, mem, removed ->
+            when {
+                owner -> true
+                removed -> false
+                mem == null -> false
+                else -> mem.status.equals("Active", ignoreCase = true) && mem.permissions[key] == true
+            }
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
+    val canSellFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.SELL)
+    val canViewStockFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.VIEW_STOCK)
+    val canAddEditProductsFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.ADD_EDIT_PRODUCTS)
+    val canSeeBuyingPriceAndProfitFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.SEE_BUYING_PRICE_AND_PROFIT)
+    val canSeeHistoryFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.HISTORY)
+    val canAccessCustomersAndBakiFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.CUSTOMERS_AND_BAKI)
+    val canReceivePaymentFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.RECEIVE_PAYMENT)
+    val canAccessSuppliersAndPurchasesFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.SUPPLIERS_AND_PURCHASES)
+    val canPaySupplierFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.PAY_SUPPLIER)
+    val canViewReportsFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.REPORTS)
+    val canAccessCashAndBankFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.CASH_AND_BANK)
+    val canAccessExpensesAndIncomeFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.EXPENSES_AND_OTHER_INCOME)
+    val canAccessNotesFlow: StateFlow<Boolean> = permissionStateFlow(StorePermissions.NOTES)
+
+    fun hasPermission(key: String): Boolean =
+        isOwner.value || (!isRemoved.value && currentMember.value?.status.equals("Active", ignoreCase = true) && currentMember.value?.permissions?.get(key) == true)
+    fun canSeeBuyingPriceAndProfit(): Boolean = canSeeBuyingPriceAndProfitFlow.value
+    fun canSell(): Boolean = canSellFlow.value
+    fun canViewStock(): Boolean = canViewStockFlow.value
+    fun canAddEditProducts(): Boolean = canAddEditProductsFlow.value
+    fun canSeeHistory(): Boolean = canSeeHistoryFlow.value
+    fun canAccessCustomersAndBaki(): Boolean = canAccessCustomersAndBakiFlow.value
+    fun canReceivePayment(): Boolean = canReceivePaymentFlow.value
+    fun canAccessSuppliersAndPurchases(): Boolean = canAccessSuppliersAndPurchasesFlow.value
+    fun canPaySupplier(): Boolean = canPaySupplierFlow.value
+    fun canViewReports(): Boolean = canViewReportsFlow.value
+    fun canAccessCashAndBank(): Boolean = canAccessCashAndBankFlow.value
+    fun canAccessExpensesAndIncome(): Boolean = canAccessExpensesAndIncomeFlow.value
+    fun canAccessNotes(): Boolean = canAccessNotesFlow.value
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun <T> gatedCollection(
+        allowedFlow: Flow<Boolean>,
+        source: () -> Flow<List<T>>
+    ): StateFlow<List<T>> = combine(allowedFlow, isRemoved) { allowed, removed ->
+        allowed && !removed
+    }.flatMapLatest { canRead ->
+        if (canRead) source().orEmptyOnDenied() else flowOf(emptyList())
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     // Products catalog
-    val products: StateFlow<List<Product>> = repository.observeProducts(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val products: StateFlow<List<Product>> = gatedCollection(
+        combine(
+            canViewStockFlow,
+            canSellFlow,
+            canAddEditProductsFlow,
+            canViewReportsFlow,
+            canAccessSuppliersAndPurchasesFlow
+        ) { stock, sell, addEdit, rep, sup -> stock || sell || addEdit || rep || sup }
+    ) { repository.observeProducts(storeId) }
 
     // Stock Summary: items count, low stock count, stock value at cost
     val stockSummary: StateFlow<StockSummary> = products.map { prodList ->
@@ -215,8 +367,11 @@ class StoreViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     // Sales history
-    val sales: StateFlow<List<Sale>> = repository.observeSales(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val sales: StateFlow<List<Sale>> = gatedCollection(
+        combine(canSeeHistoryFlow, canViewReportsFlow, canAccessCashAndBankFlow) { hist, rep, cash ->
+            hist || rep || cash
+        }
+    ) { repository.observeSales(storeId) }
 
     // Recent sales (up to 10)
     val recentSales: StateFlow<List<Sale>> = sales.map { list ->
@@ -224,28 +379,53 @@ class StoreViewModel(
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
     // Customers management (real-time stream)
-    val customers: StateFlow<List<Customer>> = repository.observeCustomers(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val customers: StateFlow<List<Customer>> = gatedCollection(
+        combine(
+            canAccessCustomersAndBakiFlow,
+            canReceivePaymentFlow,
+            canSellFlow,
+            canViewReportsFlow
+        ) { baki, pay, sell, rep -> baki || pay || sell || rep }
+    ) { repository.observeCustomers(storeId) }
 
     // Payments recorded (Payment In)
-    val payments: StateFlow<List<Payment>> = repository.observePayments(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val payments: StateFlow<List<Payment>> = gatedCollection(
+        combine(
+            canReceivePaymentFlow,
+            canViewReportsFlow,
+            canAccessCashAndBankFlow,
+            canAccessCustomersAndBakiFlow,
+            canSeeHistoryFlow
+        ) { rec, rep, cash, baki, hist -> rec || rep || cash || (baki && hist) }
+    ) { repository.observePayments(storeId) }
 
     // Suppliers (stream)
-    val suppliers: StateFlow<List<Supplier>> = repository.observeSuppliers(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val suppliers: StateFlow<List<Supplier>> = gatedCollection(
+        combine(
+            canAccessSuppliersAndPurchasesFlow,
+            canPaySupplierFlow,
+            canViewReportsFlow
+        ) { sup, pay, rep -> sup || pay || rep }
+    ) { repository.observeSuppliers(storeId) }
 
     // Purchases (stream)
-    val purchases: StateFlow<List<Purchase>> = repository.observePurchases(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val purchases: StateFlow<List<Purchase>> = gatedCollection(
+        combine(
+            canAccessSuppliersAndPurchasesFlow,
+            canViewReportsFlow,
+            canAccessCashAndBankFlow
+        ) { sup, rep, cash -> sup || rep || cash }
+    ) { repository.observePurchases(storeId) }
 
     // Purchase Returns (stream)
-    val purchaseReturns: StateFlow<List<PurchaseReturn>> = repository.observePurchaseReturns(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val purchaseReturns: StateFlow<List<PurchaseReturn>> = gatedCollection(
+        combine(canAccessSuppliersAndPurchasesFlow, canViewReportsFlow) { sup, rep -> sup || rep }
+    ) { repository.observePurchaseReturns(storeId) }
 
-    // Health Fix Logs (stream)
-    val healthFixLogs: StateFlow<List<HealthFixLog>> = repository.observeHealthFixLogs(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    // Health Fix Logs (stream - owner only)
+    val healthFixLogs: StateFlow<List<HealthFixLog>> = gatedCollection(isOwner) {
+        repository.observeHealthFixLogs(storeId)
+    }
 
     // History and reporting period state
     private val _historyPeriod = MutableStateFlow(HistoryPeriod.TODAY)
@@ -261,79 +441,61 @@ class StoreViewModel(
     val historyViewMode: StateFlow<HistoryViewMode> = _historyViewMode.asStateFlow()
 
     // Accounts (stream)
-    val accounts: StateFlow<List<Account>> = repository.observeAccounts(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val accounts: StateFlow<List<Account>> = gatedCollection(canAccessCashAndBankFlow) {
+        repository.observeAccounts(storeId)
+    }
 
     // Adjustments (stream)
-    val adjustments: StateFlow<List<AccountAdjustment>> = repository.observeAdjustments(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val adjustments: StateFlow<List<AccountAdjustment>> = gatedCollection(canAccessCashAndBankFlow) {
+        repository.observeAdjustments(storeId)
+    }
 
     // Expenses (stream)
-    val expenses: StateFlow<List<Expense>> = repository.observeExpenses(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val expenses: StateFlow<List<Expense>> = gatedCollection(
+        combine(canAccessExpensesAndIncomeFlow, canViewReportsFlow, canAccessCashAndBankFlow) { exp, rep, cash ->
+            exp || rep || cash
+        }
+    ) { repository.observeExpenses(storeId) }
 
     // Other Incomes (stream)
-    val otherIncomes: StateFlow<List<OtherIncome>> = repository.observeOtherIncomes(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val otherIncomes: StateFlow<List<OtherIncome>> = gatedCollection(
+        combine(canAccessExpensesAndIncomeFlow, canViewReportsFlow, canAccessCashAndBankFlow) { inc, rep, cash ->
+            inc || rep || cash
+        }
+    ) { repository.observeOtherIncomes(storeId) }
 
     // Categories (stream)
-    val categories: StateFlow<List<StoreCategory>> = repository.observeCategories(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val categories: StateFlow<List<StoreCategory>> = gatedCollection(
+        combine(canAccessExpensesAndIncomeFlow, canViewReportsFlow) { exp, rep -> exp || rep }
+    ) { repository.observeCategories(storeId) }
 
     // Store Notes (stream)
-    val notes: StateFlow<List<StoreNote>> = repository.observeNotes(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val notes: StateFlow<List<StoreNote>> = gatedCollection(canAccessNotesFlow) {
+        repository.observeNotes(storeId)
+    }
 
     // Supplier Payments (stream)
-    val supplierPayments: StateFlow<List<SupplierPayment>> = repository.observeSupplierPayments(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val supplierPayments: StateFlow<List<SupplierPayment>> = gatedCollection(
+        combine(
+            canPaySupplierFlow,
+            canAccessSuppliersAndPurchasesFlow,
+            canViewReportsFlow,
+            canAccessCashAndBankFlow
+        ) { pay, sup, rep, cash -> pay || sup || rep || cash }
+    ) { repository.observeSupplierPayments(storeId) }
 
     // Members & Invites streams
-    val members: StateFlow<List<StoreMember>> = repository.observeMembers(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val members: StateFlow<List<StoreMember>> = gatedCollection(
+        combine(store, isOwner, myMemberDoc) { s, owner, mem ->
+            s != null && (owner || (mem != null && mem.status.equals("Active", ignoreCase = true)))
+        }
+    ) { repository.observeMembers(storeId) }
 
-    val invites: StateFlow<List<StoreInvite>> = repository.observeInvites(storeId)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
+    val invites: StateFlow<List<StoreInvite>> = gatedCollection(isOwner) {
+        repository.observeInvites(storeId)
+    }
 
     val selectedMember = MutableStateFlow<StoreMember?>(null)
-
-    val isOwner: StateFlow<Boolean> = combine(store, MutableStateFlow(currentUserId)) { s, uid ->
-        s != null && (s.ownerId == uid || s.ownerId.isBlank() || uid == "demo_user")
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), true)
-
-    val currentMember: StateFlow<StoreMember?> = combine(members, store, isOwner) { mems, s, owner ->
-        if (owner) {
-            StoreMember(
-                userId = currentUserId,
-                displayName = "Owner",
-                roleLabel = "Owner",
-                permissionLevel = "Full",
-                permissions = StorePermissions.defaultOwnerPermissions(),
-                status = "Active"
-            )
-        } else {
-            mems.find { it.userId == currentUserId }
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
-
-    val isRemoved: StateFlow<Boolean> = combine(currentMember, isOwner) { mem, owner ->
-        !owner && mem != null && mem.status.equals("Removed", ignoreCase = true)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), false)
-
-    fun hasPermission(key: String): Boolean = isOwner.value || (currentMember.value?.permissions?.get(key) == true)
-    fun canSeeBuyingPriceAndProfit(): Boolean = isOwner.value || (currentMember.value?.permissions?.get(StorePermissions.SEE_BUYING_PRICE_AND_PROFIT) == true)
-    fun canSell(): Boolean = hasPermission(StorePermissions.SELL)
-    fun canViewStock(): Boolean = hasPermission(StorePermissions.VIEW_STOCK)
-    fun canAddEditProducts(): Boolean = hasPermission(StorePermissions.ADD_EDIT_PRODUCTS)
-    fun canSeeHistory(): Boolean = hasPermission(StorePermissions.HISTORY)
-    fun canAccessCustomersAndBaki(): Boolean = hasPermission(StorePermissions.CUSTOMERS_AND_BAKI)
-    fun canReceivePayment(): Boolean = hasPermission(StorePermissions.RECEIVE_PAYMENT)
-    fun canAccessSuppliersAndPurchases(): Boolean = hasPermission(StorePermissions.SUPPLIERS_AND_PURCHASES)
-    fun canPaySupplier(): Boolean = hasPermission(StorePermissions.PAY_SUPPLIER)
-    fun canViewReports(): Boolean = hasPermission(StorePermissions.REPORTS)
-    fun canAccessCashAndBank(): Boolean = hasPermission(StorePermissions.CASH_AND_BANK)
-    fun canAccessExpensesAndIncome(): Boolean = hasPermission(StorePermissions.EXPENSES_AND_OTHER_INCOME)
-    fun canAccessNotes(): Boolean = hasPermission(StorePermissions.NOTES)
 
     // Last used account ID (remembered across operations, defaults to "cash_in_hand")
     private val _lastUsedAccountId = MutableStateFlow("cash_in_hand")
@@ -345,21 +507,19 @@ class StoreViewModel(
 
     // Account Balances Map: accountId -> Balance (Derived from CalculationEngine)
     val accountBalances: StateFlow<Map<String, Double>> = combine(
-        accounts,
-        sales,
-        payments,
-        purchases,
-        supplierPayments
-    ) { accList, sList, payList, purList, spList ->
+        combine(accounts, sales, payments) { accList, sList, payList -> Triple(accList, sList, payList) },
+        combine(purchases, supplierPayments, expenses) { purList, spList, expList -> Triple(purList, spList, expList) },
+        combine(otherIncomes, adjustments) { incList, adjList -> incList to adjList }
+    ) { (accList, sList, payList), (purList, spList, expList), (incList, adjList) ->
         CalculationEngine.calculateAccountBalances(
             accounts = accList,
             sales = sList,
             paymentsIn = payList,
             purchases = purList,
             supplierPayments = spList,
-            expenses = expenses.value,
-            otherIncomes = otherIncomes.value,
-            adjustments = adjustments.value
+            expenses = expList,
+            otherIncomes = incList,
+            adjustments = adjList
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyMap())
 
@@ -378,24 +538,31 @@ class StoreViewModel(
 
     // Account statement report for selected account & selected business period
     val selectedAccountStatement: StateFlow<AccountStatementReport?> = combine(
-        _selectedAccount,
-        sales,
-        payments,
-        purchases,
-        _historyPeriod
-    ) { acc, sList, payList, purList, period ->
+        combine(_selectedAccount, sales, payments) { acc, sList, payList -> Triple(acc, sList, payList) },
+        combine(purchases, supplierPayments, expenses) { purList, spList, expList -> Triple(purList, spList, expList) },
+        combine(otherIncomes, adjustments, _historyPeriod, _historyCustomDateRange) { incList, adjList, period, customRange ->
+            listOf(incList, adjList, period, customRange)
+        }
+    ) { (acc, sList, payList), (purList, spList, expList), extras ->
+        @Suppress("UNCHECKED_CAST")
+        val incList = extras[0] as List<OtherIncome>
+        @Suppress("UNCHECKED_CAST")
+        val adjList = extras[1] as List<AccountAdjustment>
+        val period = extras[2] as HistoryPeriod
+        @Suppress("UNCHECKED_CAST")
+        val customRange = extras[3] as Pair<Long, Long>?
         if (acc != null) {
             CalculationEngine.calculateAccountStatement(
                 account = acc,
                 allSales = sList,
                 allPaymentsIn = payList,
                 allPurchases = purList,
-                allSupplierPayments = supplierPayments.value,
-                allExpenses = expenses.value,
-                allOtherIncomes = otherIncomes.value,
-                allAdjustments = adjustments.value,
+                allSupplierPayments = spList,
+                allExpenses = expList,
+                allOtherIncomes = incList,
+                allAdjustments = adjList,
                 period = period,
-                customRange = _historyCustomDateRange.value
+                customRange = customRange
             )
         } else null
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), null)
@@ -810,19 +977,16 @@ class StoreViewModel(
 
     // Profit & Loss statement
     val pnlStatement: StateFlow<ProfitAndLossStatement> = combine(
-        businessFilteredSales,
-        businessFilteredPurchases,
-        businessFilteredReturns,
-        businessFilteredExpenses,
-        businessFilteredOtherIncomes
-    ) { filteredSales, filteredPurchases, filteredReturns, filteredExpenses, filteredOtherIncomes ->
+        combine(businessFilteredSales, businessFilteredPurchases, businessFilteredReturns) { s, p, r -> Triple(s, p, r) },
+        combine(businessFilteredExpenses, businessFilteredOtherIncomes, _isPnlStockBased) { exp, inc, stockBased -> Triple(exp, inc, stockBased) }
+    ) { (filteredSales, filteredPurchases, filteredReturns), (filteredExpenses, filteredOtherIncomes, stockBased) ->
         CalculationEngine.calculateProfitAndLoss(
             sales = filteredSales,
             purchases = filteredPurchases,
             returns = filteredReturns,
             expenses = filteredExpenses,
             otherIncomes = filteredOtherIncomes,
-            isStockBased = _isPnlStockBased.value
+            isStockBased = stockBased
         )
     }.stateIn(
         viewModelScope,
@@ -840,21 +1004,19 @@ class StoreViewModel(
 
     // Day Book entries
     val dayBookEntries: StateFlow<List<DayBookEntry>> = combine(
-        businessFilteredSales,
-        businessFilteredPurchases,
-        businessFilteredPayments,
-        businessFilteredReturns,
-        businessFilteredExpenses
-    ) { sList, pList, payList, rList, expList ->
+        combine(businessFilteredSales, businessFilteredPurchases, businessFilteredPayments) { s, p, pay -> Triple(s, p, pay) },
+        combine(businessFilteredReturns, businessFilteredSupplierPayments, businessFilteredExpenses) { r, sp, exp -> Triple(r, sp, exp) },
+        combine(businessFilteredOtherIncomes, businessFilteredAdjustments) { inc, adj -> inc to adj }
+    ) { (sList, pList, payList), (rList, spList, expList), (incList, adjList) ->
         CalculationEngine.calculateDayBook(
             sales = sList,
             purchases = pList,
             paymentsIn = payList,
             returns = rList,
-            supplierPayments = businessFilteredSupplierPayments.value,
+            supplierPayments = spList,
             expenses = expList,
-            otherIncomes = businessFilteredOtherIncomes.value,
-            adjustments = businessFilteredAdjustments.value
+            otherIncomes = incList,
+            adjustments = adjList
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000L), emptyList())
 
@@ -1089,6 +1251,12 @@ class StoreViewModel(
 
         viewModelScope.launch {
             try {
+                val existingProduct = products.value.find { it.id == productId }
+                val safeBuyPrice = if (canSeeBuyingPriceAndProfit()) {
+                    buyPrice
+                } else {
+                    existingProduct?.buyPrice ?: buyPrice
+                }
                 val updated = Product(
                     id = productId,
                     storeId = storeId,
@@ -1096,13 +1264,17 @@ class StoreViewModel(
                     nameBn = nameBn.trim(),
                     category = category.trim().ifEmpty { "General" },
                     unit = unit.trim().ifEmpty { "pcs" },
-                    buyPrice = buyPrice,
+                    buyPrice = safeBuyPrice,
                     sellPrice = sellPrice,
                     stock = stock,
                     lowStockLimit = lowStockLimit,
                     photoUri = photoUri.trim()
                 )
-                repository.updateProduct(storeId, updated)
+                repository.updateProduct(
+                    storeId = storeId,
+                    product = updated,
+                    previousPhotoUri = existingProduct?.photoUri ?: ""
+                )
                 _statusMessage.value = "Product '${name.trim()}' updated successfully"
                 onSuccess()
             } catch (e: Exception) {
@@ -1121,7 +1293,8 @@ class StoreViewModel(
 
         viewModelScope.launch {
             try {
-                repository.deleteProduct(storeId, productId)
+                val existingPhoto = products.value.find { it.id == productId }?.photoUri ?: ""
+                repository.deleteProduct(storeId, productId, existingPhoto)
                 _statusMessage.value = "Product deleted successfully"
                 onSuccess()
             } catch (e: Exception) {
@@ -2039,13 +2212,11 @@ class StoreViewModel(
     // -------------------------------------------------------------
 
     val staffReport: StateFlow<com.example.domain.StaffReportSummary> = combine(
-        members,
-        store,
-        sales,
+        combine(members, store, sales) { mems, st, sList -> Triple(mems, st, sList) },
         payments,
         historyPeriod,
         historyCustomDateRange
-    ) { mems, st, sList, pList, period, customRange ->
+    ) { (mems, st, sList), pList, period, customRange ->
         CalculationEngine.calculateStaffReport(
             members = mems,
             ownerUid = st?.ownerId ?: "demo_user",

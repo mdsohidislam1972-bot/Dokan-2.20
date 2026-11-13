@@ -78,7 +78,7 @@ fun StaffReportScreen(
     val customRange by storeViewModel.historyCustomDateRange.collectAsState()
     val staffSummary by storeViewModel.staffReport.collectAsState()
     val store by storeViewModel.store.collectAsState()
-    val canSeeProfit = storeViewModel.canSeeBuyingPriceAndProfit()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
 
     val nowFormatted = remember { SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.US).format(Date()) }
 
@@ -130,11 +130,11 @@ fun StaffReportScreen(
             }
         }
 
-        val rawRows = staffSummary.rows.map { row ->
+        val rawRows: List<List<Double?>> = staffSummary.rows.map { row ->
             if (canSeeProfit) {
-                listOf(null, null, row.salesCount, row.itemsSold, row.totalSales, row.profit, row.paymentsReceived)
+                listOf(null, null, row.salesCount.toDouble(), row.itemsSold.toDouble(), row.totalSales, row.profit, row.paymentsReceived)
             } else {
-                listOf(null, null, row.salesCount, row.itemsSold, row.totalSales, row.paymentsReceived)
+                listOf(null, null, row.salesCount.toDouble(), row.itemsSold.toDouble(), row.totalSales, row.paymentsReceived)
             }
         }
 
@@ -159,10 +159,10 @@ fun StaffReportScreen(
             )
         }
 
-        val rawTotals = if (canSeeProfit) {
-            listOf(null, null, staffSummary.totalSalesCount, staffSummary.totalItemsSold, staffSummary.totalSalesAmount, staffSummary.totalProfit, staffSummary.totalPaymentsReceived)
+        val rawTotals: List<Double?> = if (canSeeProfit) {
+            listOf(null, null, staffSummary.totalSalesCount.toDouble(), staffSummary.totalItemsSold.toDouble(), staffSummary.totalSalesAmount, staffSummary.totalProfit, staffSummary.totalPaymentsReceived)
         } else {
-            listOf(null, null, staffSummary.totalSalesCount, staffSummary.totalItemsSold, staffSummary.totalSalesAmount, staffSummary.totalPaymentsReceived)
+            listOf(null, null, staffSummary.totalSalesCount.toDouble(), staffSummary.totalItemsSold.toDouble(), staffSummary.totalSalesAmount, staffSummary.totalPaymentsReceived)
         }
 
         return ReportTableData(
@@ -221,7 +221,7 @@ fun StaffReportScreen(
             },
             onShare = {
                 val file = ReportExportUtil.generatePdfReport(context, buildReportData(), "StaffReport_${System.currentTimeMillis()}")
-                ReportExportUtil.shareReportFile(context, file)
+                ReportExportUtil.shareReportFile(context, file, "application/pdf", "Staff Performance Report")
             }
         )
 
@@ -270,8 +270,7 @@ fun StaffReportScreen(
                 item {
                     Spacer(modifier = Modifier.height(30.dp))
                     PlainEmptyState(
-                        title = if (currentLanguage == AppLanguage.BN) "কোন স্টাফ কার্যক্রম নেই" else "No Staff Activity",
-                        subtitle = if (currentLanguage == AppLanguage.BN) "এই সময়ের মধ্যে কোনো বিক্রয় বা কালেকশন রেকর্ড নেই" else "No sales or collections recorded by staff in this period"
+                        message = if (currentLanguage == AppLanguage.BN) "এই সময়ের মধ্যে কোনো বিক্রয় বা কালেকশন রেকর্ড নেই" else "No sales or collections recorded by staff in this period"
                     )
                 }
             } else {

@@ -469,6 +469,7 @@ fun AddExpenseDialog(
     val categories by storeViewModel.categories.collectAsState()
     val accounts by storeViewModel.accounts.collectAsState()
     val lastUsedAccountId by storeViewModel.lastUsedAccountId.collectAsState()
+    val canCashBank by storeViewModel.canAccessCashAndBankFlow.collectAsState()
 
     val expenseCategories = remember(categories) {
         categories.filter { it.type == "expense" && !it.isArchived }
@@ -609,19 +610,21 @@ fun AddExpenseDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Account Picker
-                AccountPickerField(
-                    selectedAccountId = selectedAccountId,
-                    selectedAccountName = selectedAccountName,
-                    onAccountSelected = { acc ->
-                        selectedAccountId = acc.id
-                        selectedAccountName = acc.name
-                    },
-                    storeViewModel = storeViewModel,
-                    label = "Paid From Account"
-                )
+                // Account Picker (hidden if staff lacks Cash & Bank permission)
+                if (canCashBank) {
+                    AccountPickerField(
+                        selectedAccountId = selectedAccountId,
+                        selectedAccountName = selectedAccountName,
+                        onAccountSelected = { acc ->
+                            selectedAccountId = acc.id
+                            selectedAccountName = acc.name
+                        },
+                        storeViewModel = storeViewModel,
+                        label = "Paid From Account"
+                    )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
 
                 GlassTextField(
                     value = note,
@@ -1300,6 +1303,7 @@ fun AddOtherIncomeDialog(
     val categories by storeViewModel.categories.collectAsState()
     val accounts by storeViewModel.accounts.collectAsState()
     val lastUsedAccountId by storeViewModel.lastUsedAccountId.collectAsState()
+    val canCashBank by storeViewModel.canAccessCashAndBankFlow.collectAsState()
 
     val incomeCategories = remember(categories) {
         categories.filter { it.type == "income" && !it.isArchived }
@@ -1431,19 +1435,21 @@ fun AddOtherIncomeDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Account Picker
-                AccountPickerField(
-                    selectedAccountId = selectedAccountId,
-                    selectedAccountName = selectedAccountName,
-                    onAccountSelected = { acc ->
-                        selectedAccountId = acc.id
-                        selectedAccountName = acc.name
-                    },
-                    storeViewModel = storeViewModel,
-                    label = "Deposited To Account"
-                )
+                // Account Picker (hidden if staff lacks Cash & Bank permission)
+                if (canCashBank) {
+                    AccountPickerField(
+                        selectedAccountId = selectedAccountId,
+                        selectedAccountName = selectedAccountName,
+                        onAccountSelected = { acc ->
+                            selectedAccountId = acc.id
+                            selectedAccountName = acc.name
+                        },
+                        storeViewModel = storeViewModel,
+                        label = "Deposited To Account"
+                    )
 
-                Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
 
                 GlassTextField(
                     value = note,

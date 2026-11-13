@@ -1,5 +1,6 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,12 +19,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ViewList
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.MonetizationOn
 import androidx.compose.material.icons.filled.Search
@@ -55,9 +57,9 @@ import com.example.ui.components.GlassCard
 import com.example.ui.components.GlassOutlinedButton
 import com.example.ui.components.GlassTextField
 import com.example.ui.components.MetricCard
+import com.example.ui.components.ProductThumbnail
 import com.example.ui.components.QuantityProgressRing
 import com.example.ui.components.VividButton
-import com.example.ui.components.getCategoryIcon
 import com.example.ui.theme.AlertRed
 import com.example.ui.theme.AlertRedContainer
 import com.example.ui.theme.DarkBackground
@@ -79,6 +81,12 @@ fun StockScreen(
     val products by storeViewModel.products.collectAsState()
     val stockSummary by storeViewModel.stockSummary.collectAsState()
     val isBusy by storeViewModel.isBusy.collectAsState()
+
+    val isOwner by storeViewModel.isOwner.collectAsState()
+    val canAddEdit by storeViewModel.canAddEditProductsFlow.collectAsState()
+    val canSeeProfit by storeViewModel.canSeeBuyingPriceAndProfitFlow.collectAsState()
+    val isGridView by storeViewModel.isStockGridView.collectAsState()
+    val errorMessage by storeViewModel.errorMessage.collectAsState()
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategoryFilter by remember { mutableStateOf("All") }
@@ -136,16 +144,21 @@ fun StockScreen(
                         )
                     }
 
-                    VividButton(
-                        text = "+ Product",
-                        onClick = { showAddProductWizard = true },
-                        icon = Icons.Default.Add,
-                        testTag = "stock_add_product_btn"
-                    )
+                    if (canAddEdit) {
+                        VividButton(
+                            text = "+ Product",
+                            onClick = {
+                                storeViewModel.clearErrorMessage()
+                                showAddProductWizard = true
+                            },
+                            icon = Icons.Default.Add,
+                            testTag = "stock_add_product_btn"
+                        )
+                    }
                 }
             }
 
-            // Stat Tiles: Items, Low Stock, Stock Value at Cost (from CalculationEngine)
+            // Stat Tiles: Items, Low Stock, Stock Value at Cost (if allowed)
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -164,32 +177,61 @@ fun StockScreen(
                         isHighlight = stockSummary.lowStockCount > 0,
                         modifier = Modifier.weight(1f)
                     )
-                    MetricCard(
-                        title = "Value (Cost)",
-                        value = ShopLocale.formatMoney(stockSummary.stockValueAtCost, currentLanguage),
-                        icon = Icons.Default.MonetizationOn,
-                        isHighlight = true,
-                        modifier = Modifier.weight(1.2f)
-                    )
+                    if (canSeeProfit) {
+                        MetricCard(
+                            title = "Value (Cost)",
+                            value = ShopLocale.formatMoney(stockSummary.stockValueAtCost, currentLanguage),
+                            icon = Icons.Default.MonetizationOn,
+                            isHighlight = true,
+                            modifier = Modifier.weight(1.2f)
+                        )
+                    }
                 }
             }
 
-            // Search Bar
+            // Search Bar + Grid/List Toggle
             item {
-                GlassTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    label = "Search products...",
-                    leadingIcon = Icons.Default.Search,
-                    trailingIcon = if (searchQuery.isNotEmpty()) {
-                        {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Close, contentDescription = "Clear", tint = TextMuted)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    GlassTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = "Search products...",
+                        leadingIcon = Icons.Default.Search,
+                        trailingIcon = if (searchQuery.isNotEmpty()) {
+                            {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear", tint = TextMuted)
+                                }
                             }
+                        } else null,
+                        modifier = Modifier.weight(1f),
+                        testTag = "stock_search_input"
+                    )
+
+                    Surface(
+                        onClick = { storeViewModel.toggleStockViewMode() },
+                        shape = RoundedCornerShape(16.dp),
+                        color = Color(0x33202020),
+                        border = BorderStroke(1.dp, GlassBorder),
+                        modifier = Modifier
+                            .padding(top = 6.dp)
+                            .size(52.dp)
+                            .testTag("stock_view_toggle")
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (isGridView) Icons.AutoMirrored.Filled.ViewList else Icons.Default.GridView,
+                                contentDescription = if (isGridView) "Switch to List View" else "Switch to Grid View",
+                                tint = VividGreen,
+                                modifier = Modifier.size(22.dp)
+                            )
                         }
-                    } else null,
-                    testTag = "stock_search_input"
-                )
+                    }
+                }
             }
 
             // Category Chips
@@ -246,13 +288,47 @@ fun StockScreen(
                         }
                     }
                 }
+            } else if (isGridView) {
+                items(filteredProducts.chunked(2), key = { row -> "grid_" + row.joinToString("_") { it.id } }) { rowProducts ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        rowProducts.forEach { product ->
+                            StockProductGridCard(
+                                product = product,
+                                currentLanguage = currentLanguage,
+                                canAddEdit = canAddEdit,
+                                canSeeProfit = canSeeProfit,
+                                onClick = {
+                                    if (canAddEdit) {
+                                        storeViewModel.clearErrorMessage()
+                                        editingProduct = product
+                                    }
+                                },
+                                onRestock = { if (canAddEdit) restockProduct = product },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (rowProducts.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
             } else {
                 items(filteredProducts, key = { it.id }) { product ->
                     StockProductCard(
                         product = product,
                         currentLanguage = currentLanguage,
-                        onClick = { editingProduct = product },
-                        onRestock = { restockProduct = product }
+                        canAddEdit = canAddEdit,
+                        canSeeProfit = canSeeProfit,
+                        onClick = {
+                            if (canAddEdit) {
+                                storeViewModel.clearErrorMessage()
+                                editingProduct = product
+                            }
+                        },
+                        onRestock = { if (canAddEdit) restockProduct = product }
                     )
                 }
             }
@@ -263,7 +339,12 @@ fun StockScreen(
             AddProductWizardDialog(
                 currentLanguage = currentLanguage,
                 isBusy = isBusy,
-                onDismiss = { showAddProductWizard = false },
+                canSeeBuyingPrice = canSeeProfit,
+                externalError = errorMessage,
+                onDismiss = {
+                    storeViewModel.clearErrorMessage()
+                    showAddProductWizard = false
+                },
                 onConfirm = { name, nameBn, category, unit, buy, sell, stock, lowLimit, photo ->
                     storeViewModel.addNewProductWizard(
                         name = name,
@@ -287,7 +368,12 @@ fun StockScreen(
                 productToEdit = editingProduct,
                 currentLanguage = currentLanguage,
                 isBusy = isBusy,
-                onDismiss = { editingProduct = null },
+                canSeeBuyingPrice = canSeeProfit,
+                externalError = errorMessage,
+                onDismiss = {
+                    storeViewModel.clearErrorMessage()
+                    editingProduct = null
+                },
                 onConfirm = { name, nameBn, category, unit, buy, sell, stock, lowLimit, photo ->
                     storeViewModel.updateProductWizard(
                         productId = editingProduct!!.id,
@@ -303,11 +389,13 @@ fun StockScreen(
                         onSuccess = { editingProduct = null }
                     )
                 },
-                onDelete = {
-                    storeViewModel.deleteProduct(editingProduct!!.id) {
-                        editingProduct = null
+                onDelete = if (isOwner) {
+                    {
+                        storeViewModel.deleteProduct(editingProduct!!.id) {
+                            editingProduct = null
+                        }
                     }
-                }
+                } else null
             )
         }
 
@@ -329,36 +417,32 @@ fun StockScreen(
 fun StockProductCard(
     product: Product,
     currentLanguage: AppLanguage,
+    canAddEdit: Boolean = true,
+    canSeeProfit: Boolean = true,
     onClick: () -> Unit,
     onRestock: () -> Unit
 ) {
     val isOut = product.stock <= 0L
+    val isLow = product.stock <= product.lowStockLimit
 
     GlassCard(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .clickable(enabled = canAddEdit, onClick = onClick),
         testTag = "stock_product_${product.id}"
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Category Icon or Ring
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(Color(0x20FFFFFF)),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = getCategoryIcon(product.category),
-                    contentDescription = product.category,
-                    tint = VividGreen,
-                    modifier = Modifier.size(24.dp)
-                )
-            }
+            ProductThumbnail(
+                photoUri = product.photoUri,
+                category = product.category,
+                contentDescription = product.name,
+                modifier = Modifier.size(50.dp),
+                iconSize = 24.dp,
+                cornerRadius = 14.dp
+            )
 
             Spacer(modifier = Modifier.width(12.dp))
 
@@ -386,17 +470,22 @@ fun StockProductCard(
                         text = "Sale: ${ShopLocale.formatMoney(product.sellPrice, currentLanguage)}",
                         color = VividGreen,
                         fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
-                    Text(
-                        text = " • Cost: ${ShopLocale.formatMoney(product.buyPrice, currentLanguage)}",
-                        color = TextMuted,
-                        fontSize = 11.sp
-                    )
+                    if (canSeeProfit) {
+                        Text(
+                            text = " • Cost: ${ShopLocale.formatMoney(product.buyPrice, currentLanguage)}",
+                            color = TextMuted,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
-
+                Spacer(modifier = Modifier.height(2.dp))
                 if (isOut) {
-                    Spacer(modifier = Modifier.height(4.dp))
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = AlertRedContainer
@@ -410,6 +499,14 @@ fun StockProductCard(
                             maxLines = 1
                         )
                     }
+                } else {
+                    Text(
+                        text = "Stock: ${product.stock} ${product.unit}",
+                        color = if (isLow) Color(0xFFFFB300) else TextSecondary,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
 
@@ -419,18 +516,125 @@ fun StockProductCard(
             QuantityProgressRing(
                 quantity = product.stock,
                 lowStockLimit = product.lowStockLimit,
-                size = 46.dp
+                size = 44.dp
             )
 
-            Spacer(modifier = Modifier.width(8.dp))
+            if (canAddEdit) {
+                Spacer(modifier = Modifier.width(8.dp))
 
-            // Quick "+ Stock" Restock Button (Uses FieldValue.increment)
-            VividButton(
-                text = "+ Stock",
-                onClick = onRestock,
-                modifier = Modifier.defaultMinSize(minHeight = 36.dp),
-                testTag = "restock_btn_${product.id}"
+                // Quick "+ Stock" Restock Button (Uses FieldValue.increment)
+                VividButton(
+                    text = "+ Stock",
+                    onClick = onRestock,
+                    modifier = Modifier.defaultMinSize(minHeight = 36.dp),
+                    testTag = "restock_btn_${product.id}"
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun StockProductGridCard(
+    product: Product,
+    currentLanguage: AppLanguage,
+    canAddEdit: Boolean = true,
+    canSeeProfit: Boolean = true,
+    onClick: () -> Unit,
+    onRestock: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isOut = product.stock <= 0L
+    val isLow = product.stock <= product.lowStockLimit
+
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(22.dp))
+            .clickable(enabled = canAddEdit, onClick = onClick)
+            .testTag("stock_grid_product_${product.id}"),
+        shape = RoundedCornerShape(22.dp),
+        color = Color(0xFF222222),
+        border = BorderStroke(1.dp, GlassBorder)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ProductThumbnail(
+                photoUri = product.photoUri,
+                category = product.category,
+                contentDescription = product.name,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(110.dp),
+                iconSize = 36.dp,
+                cornerRadius = 14.dp
             )
+
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    text = product.name,
+                    color = TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = ShopLocale.formatMoney(product.sellPrice, currentLanguage),
+                    color = VividGreen,
+                    fontSize = 13.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (canSeeProfit) {
+                    Text(
+                        text = "Cost: ${ShopLocale.formatMoney(product.buyPrice, currentLanguage)}",
+                        color = TextMuted,
+                        fontSize = 11.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = if (isOut) "Out of Stock" else "${product.stock} ${product.unit}",
+                    color = when {
+                        isOut -> AlertRed
+                        isLow -> Color(0xFFFFB300)
+                        else -> TextSecondary
+                    },
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                QuantityProgressRing(
+                    quantity = product.stock,
+                    lowStockLimit = product.lowStockLimit,
+                    size = 34.dp
+                )
+            }
+
+            if (canAddEdit) {
+                VividButton(
+                    text = "+ Stock",
+                    onClick = onRestock,
+                    modifier = Modifier.fillMaxWidth(),
+                    testTag = "restock_grid_btn_${product.id}"
+                )
+            }
         }
     }
 }

@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Business
 import androidx.compose.material.icons.filled.Category
@@ -37,6 +38,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.LocalDrink
 import androidx.compose.material.icons.filled.LocalPharmacy
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PointOfSale
 import androidx.compose.material.icons.filled.ShoppingBasket
 import androidx.compose.material.icons.filled.Spa
@@ -58,14 +60,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.ui.theme.AlertRed
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.GlassBorder
@@ -90,7 +95,8 @@ fun FloatingGlassPillBottomBar(
     modifier: Modifier = Modifier,
     canSell: Boolean = true,
     canViewStock: Boolean = true,
-    canSeeHistory: Boolean = true
+    canSeeHistory: Boolean = true,
+    canViewReports: Boolean = true
 ) {
     Box(
         modifier = modifier
@@ -157,14 +163,16 @@ fun FloatingGlassPillBottomBar(
                     )
                 }
 
-                // Business
-                PillNavItem(
-                    label = "Business",
-                    icon = Icons.Default.Business,
-                    isSelected = currentTab == ShopNavTab.BUSINESS,
-                    onClick = { onTabSelected(ShopNavTab.BUSINESS) },
-                    testTag = "nav_business"
-                )
+                // Business (hidden when user does not have Reports permission)
+                if (canViewReports) {
+                    PillNavItem(
+                        label = "Business",
+                        icon = Icons.Default.Business,
+                        isSelected = currentTab == ShopNavTab.BUSINESS,
+                        onClick = { onTabSelected(ShopNavTab.BUSINESS) },
+                        testTag = "nav_business"
+                    )
+                }
             }
         }
 
@@ -213,6 +221,7 @@ fun FloatingGlassPillBottomBar(
                 )
             }
         }
+    }
     }
 }
 
@@ -413,5 +422,95 @@ fun getCategoryIcon(category: String): ImageVector {
         "electronics", "ইলেকট্রনিক্স" -> Icons.Default.Devices
         "personal care", "ব্যক্তিগত যত্ন", "cosmetics" -> Icons.Default.Spa
         else -> Icons.Default.Category
+    }
+}
+
+@Composable
+fun NoPermissionScreen(
+    onBack: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(DarkBackground)
+            .padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = "Restricted",
+                    tint = AlertRed,
+                    modifier = Modifier.size(44.dp)
+                )
+                Spacer(modifier = Modifier.height(14.dp))
+                Text(
+                    text = "You do not have permission",
+                    color = AlertRed,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Contact the store owner if you need access to this screen.",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+                if (onBack != null) {
+                    Spacer(modifier = Modifier.height(18.dp))
+                    GlassOutlinedButton(
+                        text = "Go Back",
+                        onClick = onBack,
+                        icon = Icons.AutoMirrored.Filled.ArrowBack,
+                        testTag = "no_permission_back_btn"
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ProductThumbnail(
+    photoUri: String,
+    category: String,
+    contentDescription: String,
+    modifier: Modifier = Modifier,
+    iconSize: Dp = 24.dp,
+    cornerRadius: Dp = 14.dp
+) {
+    var loadFailed by remember(photoUri) { mutableStateOf(false) }
+    val showImage = photoUri.isNotBlank() && !loadFailed
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(cornerRadius))
+            .background(Color(0x20FFFFFF)),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = getCategoryIcon(category),
+            contentDescription = if (showImage) null else contentDescription,
+            tint = VividGreen,
+            modifier = Modifier.size(iconSize)
+        )
+        if (showImage) {
+            AsyncImage(
+                model = photoUri,
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Crop,
+                onError = { loadFailed = true },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     }
 }

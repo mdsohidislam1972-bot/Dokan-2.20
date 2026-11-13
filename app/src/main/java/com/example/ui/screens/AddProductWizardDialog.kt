@@ -1,5 +1,7 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -12,23 +14,29 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -47,17 +55,20 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.data.model.Product
 import com.example.domain.CalculationEngine
 import com.example.ui.components.GlassCard
 import com.example.ui.components.GlassOutlinedButton
 import com.example.ui.components.GlassTextField
+import com.example.ui.components.ProductThumbnail
 import com.example.ui.components.VividButton
 import com.example.ui.components.getCategoryIcon
 import com.example.ui.theme.AlertRed
@@ -67,6 +78,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import com.example.ui.theme.VividGreen
 import com.example.util.AppLanguage
+import com.example.util.ProductImageUtil
 import com.example.util.ShopLocale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -75,6 +87,8 @@ fun AddProductWizardDialog(
     productToEdit: Product? = null,
     currentLanguage: AppLanguage,
     isBusy: Boolean,
+    canSeeBuyingPrice: Boolean = true,
+    externalError: String? = null,
     onDismiss: () -> Unit,
     onConfirm: (
         name: String,
@@ -89,6 +103,7 @@ fun AddProductWizardDialog(
     ) -> Unit,
     onDelete: (() -> Unit)? = null
 ) {
+    val context = LocalContext.current
     val isEditMode = productToEdit != null
     var step by remember { mutableIntStateOf(1) } // 1: Basics, 2: Pricing, 3: Stock
 
@@ -98,6 +113,8 @@ fun AddProductWizardDialog(
     var selectedCategory by remember { mutableStateOf(productToEdit?.category?.ifBlank { "Grocery" } ?: "Grocery") }
     var selectedUnit by remember { mutableStateOf(productToEdit?.unit?.ifBlank { "pcs" } ?: "pcs") }
     var photoUriString by remember { mutableStateOf(productToEdit?.photoUri ?: "") }
+    var showPhotoSourceChoices by remember { mutableStateOf(false) }
+    var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
 
     // Step 2: Pricing
     var buyPriceInput by remember {
@@ -124,6 +141,51 @@ fun AddProductWizardDialog(
     ) { uri: Uri? ->
         if (uri != null) {
             photoUriString = uri.toString()
+            showPhotoSourceChoices = false
+            stepError = null
+        }
+    }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        val captured = pendingCameraUri
+        if (success && captured != null) {
+            photoUriString = captured.toString()
+            showPhotoSourceChoices = false
+            stepError = null
+        }
+    }
+
+    fun launchCameraCapture() {
+        try {
+            val uri = ProductImageUtil.createTempCameraPhotoUri(context)
+            pendingCameraUri = uri
+            takePictureLauncher.launch(uri)
+        } catch (e: Exception) {
+            stepError = e.localizedMessage ?: "Unable to open camera"
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            launchCameraCapture()
+        } else {
+            stepError = "Camera permission is required to take a product photo"
+        }
+    }
+
+    fun onTakePhotoClick() {
+        val granted = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) {
+            launchCameraCapture()
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
@@ -262,7 +324,13 @@ fun AddProductWizardDialog(
 
                     Spacer(modifier = Modifier.height(16.dp))
 
-                    // Step Contents
+                    // Step Contents (scrollable so photo preview + buttons never clip on small phones)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 420.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
                     when (step) {
                         1 -> {
                             // STEP 1: BASICS
@@ -362,41 +430,217 @@ fun AddProductWizardDialog(
 
                                 Spacer(modifier = Modifier.height(12.dp))
 
-                                // Photo Picker Button
-                                Row(
+                                // Add Optional Photo (Take Photo / Choose from Gallery / Preview with Change & Remove)
+                                Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .clip(RoundedCornerShape(12.dp))
+                                        .clip(RoundedCornerShape(14.dp))
                                         .background(Color(0x20FFFFFF))
-                                        .clickable {
-                                            photoPickerLauncher.launch(
-                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                            )
-                                        }
                                         .padding(12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.AddPhotoAlternate,
-                                        contentDescription = "Pick Photo",
-                                        tint = VividGreen,
-                                        modifier = Modifier.size(24.dp)
+                                    Text(
+                                        text = if (photoUriString.isNotBlank()) "Product Photo" else "Add Optional Photo",
+                                        color = TextPrimary,
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
-                                    Spacer(modifier = Modifier.width(10.dp))
-                                    Column {
+
+                                    if (photoUriString.isNotBlank()) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            ProductThumbnail(
+                                                photoUri = photoUriString,
+                                                category = selectedCategory,
+                                                contentDescription = name.ifBlank { "Product photo preview" },
+                                                modifier = Modifier
+                                                    .size(68.dp)
+                                                    .testTag("wizard_photo_preview"),
+                                                iconSize = 28.dp,
+                                                cornerRadius = 12.dp
+                                            )
+                                            Column(
+                                                modifier = Modifier.weight(1f),
+                                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Text(
+                                                    text = if (ProductImageUtil.isLocalPhotoUri(photoUriString)) {
+                                                        "Compressed before upload"
+                                                    } else {
+                                                        "Saved product photo"
+                                                    },
+                                                    color = TextMuted,
+                                                    fontSize = 11.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Row(
+                                                    modifier = Modifier.fillMaxWidth(),
+                                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                ) {
+                                                    Surface(
+                                                        onClick = { showPhotoSourceChoices = !showPhotoSourceChoices },
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        color = Color(0x265DD62C),
+                                                        border = BorderStroke(1.dp, VividGreen),
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .defaultMinSize(minHeight = 44.dp)
+                                                            .testTag("wizard_photo_change_btn")
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                                                            horizontalArrangement = Arrangement.Center,
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Edit,
+                                                                contentDescription = null,
+                                                                tint = VividGreen,
+                                                                modifier = Modifier.size(14.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(4.dp))
+                                                            Text(
+                                                                text = "Change",
+                                                                color = VividGreen,
+                                                                fontSize = 12.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                maxLines = 1,
+                                                                softWrap = false,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                        }
+                                                    }
+                                                    Surface(
+                                                        onClick = {
+                                                            photoUriString = ""
+                                                            showPhotoSourceChoices = false
+                                                        },
+                                                        shape = RoundedCornerShape(10.dp),
+                                                        color = Color(0x26FF5252),
+                                                        border = BorderStroke(1.dp, AlertRed),
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .defaultMinSize(minHeight = 44.dp)
+                                                            .testTag("wizard_photo_remove_btn")
+                                                    ) {
+                                                        Row(
+                                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 10.dp),
+                                                            horizontalArrangement = Arrangement.Center,
+                                                            verticalAlignment = Alignment.CenterVertically
+                                                        ) {
+                                                            Icon(
+                                                                imageVector = Icons.Default.Delete,
+                                                                contentDescription = null,
+                                                                tint = AlertRed,
+                                                                modifier = Modifier.size(14.dp)
+                                                            )
+                                                            Spacer(modifier = Modifier.width(4.dp))
+                                                            Text(
+                                                                text = "Remove",
+                                                                color = AlertRed,
+                                                                fontSize = 12.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                maxLines = 1,
+                                                                softWrap = false,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
                                         Text(
-                                            text = if (photoUriString.isNotEmpty()) "Photo Selected" else "Add Optional Photo",
-                                            color = TextPrimary,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1
-                                        )
-                                        Text(
-                                            text = if (photoUriString.isNotEmpty()) "Tap to change photo" else "Uses category icon if omitted",
+                                            text = "Uses category icon if omitted",
                                             color = TextMuted,
                                             fontSize = 11.sp,
-                                            maxLines = 1
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
+                                    }
+
+                                    if (photoUriString.isBlank() || showPhotoSourceChoices) {
+                                        Surface(
+                                            onClick = { onTakePhotoClick() },
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = Color(0x1FFFFFFF),
+                                            border = BorderStroke(1.dp, GlassBorder),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .defaultMinSize(minHeight = 48.dp)
+                                                .testTag("wizard_take_photo_btn")
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.PhotoCamera,
+                                                    contentDescription = null,
+                                                    tint = VividGreen,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = "Take Photo",
+                                                    color = TextPrimary,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+
+                                        Surface(
+                                            onClick = {
+                                                photoPickerLauncher.launch(
+                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                )
+                                            },
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = Color(0x1FFFFFFF),
+                                            border = BorderStroke(1.dp, GlassBorder),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .defaultMinSize(minHeight = 48.dp)
+                                                .testTag("wizard_choose_gallery_btn")
+                                        ) {
+                                            Row(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 12.dp, vertical = 12.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.PhotoLibrary,
+                                                    contentDescription = null,
+                                                    tint = VividGreen,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                                Spacer(modifier = Modifier.width(8.dp))
+                                                Text(
+                                                    text = "Choose from Gallery",
+                                                    color = TextPrimary,
+                                                    fontSize = 13.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -410,19 +654,21 @@ fun AddProductWizardDialog(
                             val margin = CalculationEngine.calculateMarginPercent(sell, buy)
 
                             Column {
-                                GlassTextField(
-                                    value = buyPriceInput,
-                                    onValueChange = {
-                                        buyPriceInput = it
-                                        stepError = null
-                                    },
-                                    label = "Cost Price (Buy) ৳",
-                                    placeholder = "0.00",
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                                    testTag = "wizard_buy_price"
-                                )
+                                if (canSeeBuyingPrice) {
+                                    GlassTextField(
+                                        value = buyPriceInput,
+                                        onValueChange = {
+                                            buyPriceInput = it
+                                            stepError = null
+                                        },
+                                        label = "Cost Price (Buy) ৳",
+                                        placeholder = "0.00",
+                                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                                        testTag = "wizard_buy_price"
+                                    )
 
-                                Spacer(modifier = Modifier.height(10.dp))
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                }
 
                                 GlassTextField(
                                     value = sellPriceInput,
@@ -436,62 +682,64 @@ fun AddProductWizardDialog(
                                     testTag = "wizard_sell_price"
                                 )
 
-                                Spacer(modifier = Modifier.height(14.dp))
+                                if (canSeeBuyingPrice) {
+                                    Spacer(modifier = Modifier.height(14.dp))
 
-                                // Live Profit & Margin Card
-                                GlassCard(modifier = Modifier.fillMaxWidth()) {
-                                    Column {
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Icon(
-                                                    imageVector = Icons.Default.TrendingUp,
-                                                    contentDescription = null,
-                                                    tint = if (profitPerPiece >= 0.0) VividGreen else AlertRed,
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                                Spacer(modifier = Modifier.width(6.dp))
+                                    // Live Profit & Margin Card
+                                    GlassCard(modifier = Modifier.fillMaxWidth()) {
+                                        Column {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.TrendingUp,
+                                                        contentDescription = null,
+                                                        tint = if (profitPerPiece >= 0.0) VividGreen else AlertRed,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                    Spacer(modifier = Modifier.width(6.dp))
+                                                    Text(
+                                                        text = "Profit per ${selectedUnit}:",
+                                                        color = TextSecondary,
+                                                        fontSize = 13.sp,
+                                                        maxLines = 1
+                                                    )
+                                                }
                                                 Text(
-                                                    text = "Profit per ${selectedUnit}:",
+                                                    text = ShopLocale.formatMoney(profitPerPiece, currentLanguage),
+                                                    color = if (profitPerPiece >= 0.0) VividGreen else AlertRed,
+                                                    fontSize = 15.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1
+                                                )
+                                            }
+
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                            HorizontalDivider(color = Color(0x20FFFFFF))
+                                            Spacer(modifier = Modifier.height(8.dp))
+
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = "Profit Margin:",
                                                     color = TextSecondary,
                                                     fontSize = 13.sp,
                                                     maxLines = 1
                                                 )
+                                                Text(
+                                                    text = String.format(java.util.Locale.US, "%.1f%%", margin),
+                                                    color = if (margin >= 0.0) VividGreen else AlertRed,
+                                                    fontSize = 15.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    maxLines = 1
+                                                )
                                             }
-                                            Text(
-                                                text = ShopLocale.formatMoney(profitPerPiece, currentLanguage),
-                                                color = if (profitPerPiece >= 0.0) VividGreen else AlertRed,
-                                                fontSize = 15.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                maxLines = 1
-                                            )
-                                        }
-
-                                        Spacer(modifier = Modifier.height(8.dp))
-                                        HorizontalDivider(color = Color(0x20FFFFFF))
-                                        Spacer(modifier = Modifier.height(8.dp))
-
-                                        Row(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            horizontalArrangement = Arrangement.SpaceBetween,
-                                            verticalAlignment = Alignment.CenterVertically
-                                        ) {
-                                            Text(
-                                                text = "Profit Margin:",
-                                                color = TextSecondary,
-                                                fontSize = 13.sp,
-                                                maxLines = 1
-                                            )
-                                            Text(
-                                                text = String.format(java.util.Locale.US, "%.1f%%", margin),
-                                                color = if (margin >= 0.0) VividGreen else AlertRed,
-                                                fontSize = 15.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                maxLines = 1
-                                            )
                                         }
                                     }
                                 }
@@ -549,8 +797,13 @@ fun AddProductWizardDialog(
                                             color = TextSecondary,
                                             fontSize = 13.sp
                                         )
+                                        val priceReviewText = if (canSeeBuyingPrice) {
+                                            "Buy: ${ShopLocale.formatMoney(buy, currentLanguage)} | Sell: ${ShopLocale.formatMoney(sell, currentLanguage)}"
+                                        } else {
+                                            "Sale Price: ${ShopLocale.formatMoney(sell, currentLanguage)}"
+                                        }
                                         Text(
-                                            text = "Buy: ${ShopLocale.formatMoney(buy, currentLanguage)} | Sell: ${ShopLocale.formatMoney(sell, currentLanguage)}",
+                                            text = priceReviewText,
                                             color = VividGreen,
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.SemiBold
@@ -565,14 +818,16 @@ fun AddProductWizardDialog(
                             }
                         }
                     }
+                    }
 
-                    if (stepError != null) {
+                    val displayedError = stepError ?: externalError
+                    if (!displayedError.isNullOrBlank()) {
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
-                            text = stepError ?: "",
+                            text = displayedError,
                             color = AlertRed,
                             fontSize = 12.sp,
-                            maxLines = 1,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
@@ -607,10 +862,14 @@ fun AddProductWizardDialog(
                                         }
                                     }
                                     if (step == 2) {
-                                        val buy = buyPriceInput.toDoubleOrNull()
+                                        val buy = if (canSeeBuyingPrice) buyPriceInput.toDoubleOrNull() else 0.0
                                         val sell = sellPriceInput.toDoubleOrNull()
                                         if (buy == null || sell == null || buy < 0.0 || sell < 0.0) {
-                                            stepError = "Enter valid cost and selling prices"
+                                            stepError = if (canSeeBuyingPrice) {
+                                                "Enter valid cost and selling prices"
+                                            } else {
+                                                "Enter a valid selling price"
+                                            }
                                             return@VividButton
                                         }
                                     }

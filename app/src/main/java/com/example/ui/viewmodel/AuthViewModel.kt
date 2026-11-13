@@ -11,6 +11,7 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.R
+import com.example.data.model.InviteCodeConfig
 import com.example.data.model.UserProfile
 import com.example.data.repository.StoreRepository
 import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
@@ -144,13 +145,12 @@ class AuthViewModel(
         }
 
         val clientId = try {
-            val resId = context.resources.getIdentifier("default_web_client_id", "string", context.packageName)
-            if (resId != 0) context.getString(resId) else ""
+            context.getString(R.string.default_web_client_id)
         } catch (e: Exception) {
             ""
         }
         if (clientId.isBlank()) {
-            _errorMessage.value = "Google Sign-In is not configured yet. Please use Email Sign-In or Explore Demo Store."
+            _errorMessage.value = "Google Sign-In is not configured yet. Please use Explore Demo Store."
             return
         }
 
@@ -263,9 +263,13 @@ class AuthViewModel(
     }
 
     fun joinStoreWithCode(code: String, onSuccess: (String) -> Unit = {}) {
-        val trimmedCode = code.trim().uppercase()
-        if (trimmedCode.isBlank()) {
-            _errorMessage.value = "Please enter an invite code"
+        val cleanCode = InviteCodeConfig.normalize(code)
+        if (cleanCode.isBlank()) {
+            _errorMessage.value = "Please enter the ${InviteCodeConfig.CODE_LENGTH}-character invite code."
+            return
+        }
+        if (!InviteCodeConfig.isValidFormat(cleanCode)) {
+            _errorMessage.value = "Wrong invite code. Please check the ${InviteCodeConfig.CODE_LENGTH}-character code and try again."
             return
         }
 
@@ -278,7 +282,7 @@ class AuthViewModel(
         _errorMessage.value = null
         viewModelScope.launch {
             try {
-                val result = repository.joinStoreWithInvite(trimmedCode, uid, email, displayName)
+                val result = repository.joinStoreWithInvite(cleanCode, uid, email, displayName)
                 result.fold(
                     onSuccess = { storeId ->
                         if (user != null) {
